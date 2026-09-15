@@ -1,0 +1,35 @@
+@import "tailwindcss";
+
+/* One palette, one file. Light only, on purpose: the map tiles are swisstopo's
+   grey map, which has no dark version, and a dark page around a light map
+   reads as a mistake.
+
+   Contrast, measured with qa/contrast.mjs against the surface each colour is
+   actually painted on (white card, and the pale blue answer panel):
+     ink     #0f1720   white 18.0   blue-soft 15.2
+     body    #3b4652   white  9.6   blue-soft  8.1
+     muted   #56616c   white  6.3   blue-soft  5.3   ground 5.6
+     blue    #1a56b0   white  7.0   blue-soft  5.9   (white text on blue 7.0)
+     green   #146c36   white  6.5   green-soft 5.6
+     red     #c8261a   white  5.6  (the destination pin and errors) */
+@theme {
+  --color-ground: #eef1f4;
+  --color-card: #ffffff;
+  --color-ink: #0f1720;
+  --color-body: #3b4652;
+  --color-muted: #56616c;
+  --color-rule: #d8dee4;
+  --color-blue: #1a56b0;
+  --color-blue-soft: #e3ecfa;
+  --color-green: #146c36;
+  --color-green-soft: #e1f3e8;
+  --color-red: #c8261a;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Inter", "Segoe UI", Roboto, sans-serif;
+}
+
+html, body { background: var(--color-ground); color: var(--color-ink); color-scheme: light; }
+body { font-family: var(--font-sans); }
+
+/* Leaflet's own attribution control, restyled to the palette. */
+.leaflet-container { font-family: var(--font-sans); background: var(--color-rule); }
+.leaflet-control-attribution { font-size: 10px; color: var(--color-muted); }

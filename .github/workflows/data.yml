@@ -1,0 +1,35 @@
+# Rebuild public/data/zurich.json from the City of Zurich's open data every
+# night, and commit it when it changed. The commit redeploys the site on
+# Vercel, so the page always carries the city's latest "stand" date.
+name: Refresh parking data
+
+on:
+  schedule:
+    - cron: "30 2 * * *" # 04:30 in Zurich in summer, 03:30 in winter
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - name: Build the data file
+        run: node scripts/build-data.mjs
+      - name: Check the rules and the new file before publishing
+        run: |
+          node --experimental-strip-types --no-warnings qa/rules.test.mjs
+          node --experimental-strip-types --no-warnings qa/finder.test.mjs
+      - name: Commit if it changed
+        run: |
+          if git diff --quiet -- public/data/zurich.json; then echo "unchanged"; exit 0; fi
+          git config user.name "parking-data-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add public/data/zurich.json
+          git commit -m "data: Zurich parking, city stand $(node -e "console.log(require('./public/data/zurich.json').stand)")"
+          git push
