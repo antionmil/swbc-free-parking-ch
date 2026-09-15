@@ -116,12 +116,31 @@ date on it.
   means a place outside Zurich, that place comes first, marked "outside
   Zurich", and picking it says "Only Zurich so far".
 
+## Search, rebuilt after a real test on a phone
+
+Typing "Apple basel" offered the city of Basel and "Heidi-Abel-Weg", never the
+Apple Store. swisstopo's SearchServer knows addresses, place names and stops —
+no shops, no businesses. The field now asks two sources:
+
+- **Photon** (photon.komoot.io, OpenStreetMap data) for places people name:
+  "Apple Store" → Rennweg 43, "Migros Oerlikon" → Baumackerstrasse 35. Limited
+  to Switzerland, biased to Zurich, with bus platforms, tram stops, fire alarm
+  panels and the like filtered out.
+- **swisstopo**, only when the text has a number, for exact Swiss addresses. A
+  number with no town named ("Bahnhofstrasse 1") is also asked as a Zurich
+  address and listed first — as typed, it came back as Goldau, Eschenz, Elgg.
+
+"Outside Zurich" is decided by the town name the search returns, not by a
+rectangle: the Glatt centre in Wallisellen sits inside the rectangle and has
+no City of Zurich parking data.
+
 ## Outside services
 
 | Service | Terms, checked 2026-09-15 |
 |---|---|
 | swisstopo SearchServer (the destination box) | free, no key; fair use 20 requests a minute per client — the box waits 350 ms for a pause in typing, needs 3 characters, and sends two queries per pause |
 | swisstopo grey national map tiles | free, no key; credit "© swisstopo" on the map |
+| Photon (place search) | free, no key; "please be fair — extensive usage will be throttled", no availability guarantee; OpenStreetMap data, credited on the page |
 | City of Zurich open data | CC0 |
 
 The browser calls swisstopo directly; this site has no server code except the

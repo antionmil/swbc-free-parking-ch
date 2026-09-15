@@ -7,7 +7,12 @@ import { carsLabel, dayStart, dayWord, hhmm, isoDate, shortDay, wallFromDate, wa
 
 const MapStrip = dynamic(() => import("./MapStrip"), { ssr: false, loading: () => <div className="h-40 w-full rounded-2xl bg-rule" /> });
 
-type Dest = { label: string; lat: number; lon: number };
+/** `city` comes from the search when it knows it. It beats the rectangle
+ *  below: Wallisellen's Glatt centre sits inside the rectangle but is another
+ *  town, with no city of Zurich parking data. */
+type Dest = { label: string; lat: number; lon: number; city?: string };
+
+const isZurichCity = (d: Dest) => (d.city ? /^Zürich$/i.test(d.city) : inZurich(d.lat, d.lon));
 
 /* The city of Zurich, generously: a destination outside it gets an honest
  * "not covered yet" instead of an empty answer. */
@@ -103,7 +108,7 @@ export default function Finder() {
   const arrival = picked ?? nowWall ?? 0;
   const clockReady = picked !== null || nowWall !== null;
   const minutes = stayMinutes(stay, arrival);
-  const covered = dest ? inZurich(dest.lat, dest.lon) : true;
+  const covered = dest ? isZurichCity(dest) : true;
   const spots = useMemo(() => (data && dest && covered ? nearby(data, [dest.lat, dest.lon]) : []), [data, dest, covered]);
   const result = useMemo(() => answer(spots, arrival, minutes), [spots, arrival, minutes]);
   const moments = useMemo(() => laterToday(spots, arrival).filter((m) => m.at > arrival), [spots, arrival]);
@@ -210,7 +215,7 @@ export default function Finder() {
       <p className="mt-3 border-t border-rule pt-3 text-[12px] leading-relaxed text-muted">
         Shows where free parking is allowed, not whether a space is empty — no city publishes that. The sign on the street always wins.
         Public holidays are treated like working days, so on a holiday you may have longer than this says.
-        {data ? ` City of Zurich parking data from ${data.stand.split("-").reverse().join(".")} (CC0).` : ""} Map and search © swisstopo.
+        {data ? ` City of Zurich parking data from ${data.stand.split("-").reverse().join(".")} (CC0).` : ""} Map and address search © swisstopo. Place search © OpenStreetMap contributors, via Photon.
       </p>
     </div>
   );
@@ -380,6 +385,44 @@ function Empty({ onPick }: { onPick: (d: Dest) => void }) {
   );
 }
 
+/* OpenStreetMap features that are never a destination someone types. */
+const NOISE = /^(emergency|highway|barrier|power|man_made|landuse|boundary)$/;
+const NOISE_VALUE = /^(platform|tram_stop|bus_stop|subway_entrance|stop_position|atm|bicycle_rental|vending_machine|waste_basket|bench|telephone|post_box|recycling|parking_entrance|board|charging_station)$/;
+
+type PhotonFeature = {
+  geometry: { coordinates: [number, number] };
+  properties: { name?: string; street?: string; housenumber?: string; postcode?: string; city?: string; osm_key?: string; osm_value?: string; countrycode?: string };
+};
+
+async function searchPlaces(text: string): Promise<Dest[]> {
+  const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(text)}&lat=47.3769&lon=8.5417&limit=15&lang=de&bbox=5.95,45.81,10.50,47.81`;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`photon ${res.status}`);
+  const json = (await res.json()) as { features?: PhotonFeature[] };
+  return (json.features ?? [])
+    .filter((f) => f.properties.countrycode === "CH" && !NOISE.test(f.properties.osm_key ?? "") && !NOISE_VALUE.test(f.properties.osm_value ?? ""))
+    .map((f) => {
+      const p = f.properties;
+      const street = [p.street, p.housenumber].filter(Boolean).join(" ");
+      const where = [street, [p.postcode, p.city].filter(Boolean).join(" ")].filter(Boolean).join(", ");
+      const label = p.name ? (where ? `${p.name}, ${where}` : p.name) : where;
+      return { label, lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0], city: p.city };
+    })
+    .filter((d) => d.label);
+}
+
+async function searchAddresses(text: string): Promise<Dest[]> {
+  const url = `https://api3.geo.admin.ch/rest/services/api/SearchServer?type=locations&origins=address&sr=4326&limit=6&searchText=${encodeURIComponent(text)}`;
+  const res = await fetch(url);
+  const json = (await res.json()) as { results?: { attrs: { label: string; lat: number; lon: number } }[] };
+  return (json.results ?? []).map((r) => {
+    const label = cleanLabel(r.attrs.label);
+    // "Hohlstrasse 201 8004 Zürich": the town is what follows the postcode.
+    const city = /\b\d{4}\s+(.+)$/.exec(label)?.[1];
+    return { label, lat: r.attrs.lat, lon: r.attrs.lon, city };
+  });
+}
+
 function Search({ onPick, current }: { onPick: (d: Dest) => void; current: Dest | null }) {
   const [q, setQ] = useState(current?.label ?? "");
   const [results, setResults] = useState<Dest[]>([]);
@@ -389,38 +432,48 @@ function Search({ onPick, current }: { onPick: (d: Dest) => void; current: Dest 
 
   useEffect(() => { if (current) setQ(current.label); }, [current]);
 
-  /* swisstopo search, debounced: fair use is 20 requests a minute.
-     Two queries: the text as typed, and the text with "Zürich" added (which
-     ranks Zurich's "Bahnhofstrasse 1" above every other town's). If the text
-     as typed clearly means a place outside Zurich, that place comes first,
-     marked — picking it says "Only Zurich so far". The first version only ran
-     the Zurich query and hid everything else, so "Bundesplatz Bern" silently
-     became "Bernegg", a street in Zurich. */
+  /* Search, debounced 350 ms, from 3 characters.
+
+     Main source: Photon (photon.komoot.io), OpenStreetMap data. It knows
+     shops, museums, venues — "Apple Store", "Migros Oerlikon". The first
+     version used only swisstopo's SearchServer, which knows addresses, place
+     names and stops but no businesses: on a phone, "Apple basel" offered the
+     city of Basel and "Heidi-Abel-Weg" (a fuzzy match on "Abel"), never the
+     Apple Store on Freie Strasse.
+
+     Second source, only when the text contains a digit: swisstopo, for exact
+     Swiss addresses. Results are limited to Switzerland and biased to Zurich;
+     a place outside the city stays visible, marked, and picking it says
+     "Only Zurich so far" — never swapped for a Zurich lookalike. */
   useEffect(() => {
     const text = q.trim();
     if (!open || text.length < 3) { setResults([]); return; }
     const id = ++seq.current;
     const t = setTimeout(async () => {
-      const search = async (searchText: string) => {
-        const url = `https://api3.geo.admin.ch/rest/services/api/SearchServer?type=locations&sr=4326&limit=15&searchText=${encodeURIComponent(searchText)}`;
-        const res = await fetch(url);
-        const json = (await res.json()) as { results?: { attrs: { label: string; lat: number; lon: number } }[] };
-        return (json.results ?? []).map((r) => ({ label: cleanLabel(r.attrs.label), lat: r.attrs.lat, lon: r.attrs.lon }));
-      };
       try {
-        const mentionsZurich = /z(ü|ue|u)rich/i.test(text);
-        const [asTyped, inZurichQuery] = await Promise.all([search(text), mentionsZurich ? Promise.resolve([]) : search(`${text} Zürich`)]);
+        const hasNumber = /\d/.test(text);
+        const [places, addresses] = await Promise.all([
+          searchPlaces(text).catch(() => [] as Dest[]),
+          hasNumber ? searchAddresses(text).catch(() => [] as Dest[]) : Promise.resolve([] as Dest[]),
+        ]);
+        /* "Bahnhofstrasse 1" exists in hundreds of Swiss towns, and as typed
+           it came back as Goldau, Eschenz, Elgg. If the text names no town
+           that any result is in, the visitor almost certainly means Zurich:
+           ask swisstopo again with "Zürich" and list those first. If it does
+           name a town ("… Winterthur"), leave it alone. */
+        const lower = text.toLowerCase();
+        const namesATown = /z(ü|ue|u)rich/.test(lower) || [...places, ...addresses].some((d) => d.city && d.city.length > 2 && lower.includes(d.city.toLowerCase()));
+        const zurichAddresses = hasNumber && !namesATown ? await searchAddresses(`${text} Zürich`).catch(() => [] as Dest[]) : [];
         if (id !== seq.current) return;
         const seen = new Set<string>();
         const list: Dest[] = [];
-        const add = (d: Dest) => {
-          if (!d.label || seen.has(d.label) || list.length >= 6) return;
-          seen.add(d.label);
+        for (const d of [...zurichAddresses.filter(isZurichCity), ...addresses.filter(isZurichCity), ...places, ...addresses]) {
+          const k = d.label.toLowerCase().replace(/[,\s]+/g, " ");
+          if (!d.label || seen.has(k)) continue;
+          seen.add(k);
           list.push(d);
-        };
-        const top = asTyped[0];
-        if (top && !inZurich(top.lat, top.lon)) add(top);
-        for (const d of [...inZurichQuery, ...asTyped]) if (inZurich(d.lat, d.lon)) add(d);
+          if (list.length === 6) break;
+        }
         setResults(list);
       } catch {
         if (id === seq.current) setResults([]);
@@ -455,7 +508,7 @@ function Search({ onPick, current }: { onPick: (d: Dest) => void; current: Dest 
         onChange={(e) => { setQ(e.target.value); setOpen(true); }}
         onFocus={() => setOpen(true)}
         onKeyDown={(e) => { if (e.key === "Escape") setOpen(false); }}
-        placeholder="Where are you going? A place or an address"
+        placeholder="Where are you going? A shop, a place, a street"
         autoComplete="off"
         enterKeyHint="search"
         className="w-full rounded-xl border border-rule bg-card px-3 py-2.5 text-[15px] text-ink placeholder:text-muted"
@@ -467,7 +520,7 @@ function Search({ onPick, current }: { onPick: (d: Dest) => void; current: Dest 
             <li key={`${r.label}${r.lat}`}>
               <button type="button" onClick={() => { onPick(r); setOpen(false); }} className="w-full px-3 py-2.5 text-left text-[14px] hover:bg-ground">
                 {r.label}
-                {!inZurich(r.lat, r.lon) ? <span className="ml-2 text-[12px] text-muted">outside Zurich</span> : null}
+                {!isZurichCity(r) ? <span className="ml-2 text-[12px] text-muted">outside Zurich</span> : null}
               </button>
             </li>
           ))}
