@@ -102,11 +102,25 @@ only if it changed. The commit redeploys on Vercel. If the city's WFS fails,
 the job fails and the site keeps serving yesterday's file with yesterday's
 date on it.
 
+## Found by the live audit, after the copy buttons shipped
+
+- **React hydration error #418 on every load.** The page is prerendered once,
+  and the build baked its own clock into the time chip ("Now · Tue 20:15"),
+  which never matched the visitor's. The clock now starts in the browser; the
+  chip says "Now" until it does. Only visible on the production build — the
+  dev server did not show it.
+- **"Bundesplatz Bern" silently became "Bernegg"**, a street in Zurich. The
+  search added "Zürich" to every query and hid every result outside the city,
+  so a Bern address was swapped for a Zurich lookalike with no warning. It now
+  runs the text as typed alongside the Zurich query; when the text as typed
+  means a place outside Zurich, that place comes first, marked "outside
+  Zurich", and picking it says "Only Zurich so far".
+
 ## Outside services
 
 | Service | Terms, checked 2026-09-15 |
 |---|---|
-| swisstopo SearchServer (the destination box) | free, no key; fair use 20 requests a minute per client — the box waits for a pause in typing and needs 3 characters |
+| swisstopo SearchServer (the destination box) | free, no key; fair use 20 requests a minute per client — the box waits 350 ms for a pause in typing, needs 3 characters, and sends two queries per pause |
 | swisstopo grey national map tiles | free, no key; credit "© swisstopo" on the map |
 | City of Zurich open data | CC0 |
 

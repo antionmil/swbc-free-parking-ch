@@ -56,7 +56,11 @@ export default function Finder() {
   const [data, setData] = useState<DataFile | null>(null);
   const [loadError, setLoadError] = useState(false);
   const [dest, setDest] = useState<Dest | null>(null);
-  const [nowWall, setNowWall] = useState<Wall>(() => wallFromDate(new Date()));
+  /* No clock during the static build. The page is prerendered once; a time
+     baked in then ("Now · Tue 20:15") never matches the visitor's clock, and
+     React threw a hydration error (#418) on every load of the live site. The
+     clock starts in the browser. */
+  const [nowWall, setNowWall] = useState<Wall | null>(null);
   const [picked, setPicked] = useState<Wall | null>(null); // null = now
   const [stay, setStay] = useState<StayKey>("60");
   const [editingTime, setEditingTime] = useState(false);
@@ -72,6 +76,7 @@ export default function Finder() {
 
   // "Now" keeps moving while the page is open.
   useEffect(() => {
+    setNowWall(wallFromDate(new Date()));
     const t = setInterval(() => setNowWall(wallFromDate(new Date())), 30_000);
     return () => clearInterval(t);
   }, []);
@@ -95,7 +100,8 @@ export default function Finder() {
     window.history.replaceState(null, "", `?${q}`);
   }, [dest, picked, stay]);
 
-  const arrival = picked ?? nowWall;
+  const arrival = picked ?? nowWall ?? 0;
+  const clockReady = picked !== null || nowWall !== null;
   const minutes = stayMinutes(stay, arrival);
   const covered = dest ? inZurich(dest.lat, dest.lon) : true;
   const spots = useMemo(() => (data && dest && covered ? nearby(data, [dest.lat, dest.lon]) : []), [data, dest, covered]);
@@ -124,7 +130,7 @@ export default function Finder() {
           className="rounded-full border border-ink bg-ink px-3 py-1.5 text-[13px] font-medium text-white"
           aria-expanded={editingTime}
         >
-          {picked === null ? `Now · ${shortDay(arrival)} ${hhmm(arrival)}` : `${shortDay(arrival)} ${hhmm(arrival)}`}
+          {!clockReady ? "Now" : picked === null ? `Now · ${shortDay(arrival)} ${hhmm(arrival)}` : `${shortDay(arrival)} ${hhmm(arrival)}`}
         </button>
         {STAYS.map((s) => (
           <button
@@ -157,7 +163,7 @@ export default function Finder() {
           <h2 className="text-[20px] font-bold">Only Zurich so far.</h2>
           <p className="mt-1 text-[14px] text-body">{dest.label} is outside the city of Zurich. Other Swiss cities come next, city by city, as their open data allows.</p>
         </div>
-      ) : !data ? (
+      ) : !data || !clockReady ? (
         <div className="h-48 animate-pulse rounded-2xl bg-card" aria-label="Loading parking data" />
       ) : best ? (
         <Instruction option={best} arrival={arrival} />
@@ -165,7 +171,7 @@ export default function Finder() {
         <Nothing spots={spots.length} stayLabel={STAYS.find((s) => s.key === stay)!.label} arrival={arrival} shorter={result.shorter} />
       )}
 
-      {dest && covered && data ? (
+      {dest && covered && data && clockReady ? (
         <>
           <MapStrip dest={[dest.lat, dest.lon]} chosen={best ?? result.shorter} others={result.fits.slice(1)} />
 
@@ -383,26 +389,38 @@ function Search({ onPick, current }: { onPick: (d: Dest) => void; current: Dest 
 
   useEffect(() => { if (current) setQ(current.label); }, [current]);
 
-  // swisstopo search, debounced: fair use is 20 requests a minute.
+  /* swisstopo search, debounced: fair use is 20 requests a minute.
+     Two queries: the text as typed, and the text with "Zürich" added (which
+     ranks Zurich's "Bahnhofstrasse 1" above every other town's). If the text
+     as typed clearly means a place outside Zurich, that place comes first,
+     marked — picking it says "Only Zurich so far". The first version only ran
+     the Zurich query and hid everything else, so "Bundesplatz Bern" silently
+     became "Bernegg", a street in Zurich. */
   useEffect(() => {
     const text = q.trim();
     if (!open || text.length < 3) { setResults([]); return; }
     const id = ++seq.current;
     const t = setTimeout(async () => {
-      try {
-        const url = `https://api3.geo.admin.ch/rest/services/api/SearchServer?type=locations&sr=4326&limit=15&searchText=${encodeURIComponent(`${text} Zürich`)}`;
+      const search = async (searchText: string) => {
+        const url = `https://api3.geo.admin.ch/rest/services/api/SearchServer?type=locations&sr=4326&limit=15&searchText=${encodeURIComponent(searchText)}`;
         const res = await fetch(url);
         const json = (await res.json()) as { results?: { attrs: { label: string; lat: number; lon: number } }[] };
+        return (json.results ?? []).map((r) => ({ label: cleanLabel(r.attrs.label), lat: r.attrs.lat, lon: r.attrs.lon }));
+      };
+      try {
+        const mentionsZurich = /z(ü|ue|u)rich/i.test(text);
+        const [asTyped, inZurichQuery] = await Promise.all([search(text), mentionsZurich ? Promise.resolve([]) : search(`${text} Zürich`)]);
         if (id !== seq.current) return;
         const seen = new Set<string>();
         const list: Dest[] = [];
-        for (const r of json.results ?? []) {
-          const label = cleanLabel(r.attrs.label);
-          if (!label || seen.has(label) || !inZurich(r.attrs.lat, r.attrs.lon)) continue;
-          seen.add(label);
-          list.push({ label, lat: r.attrs.lat, lon: r.attrs.lon });
-          if (list.length === 6) break;
-        }
+        const add = (d: Dest) => {
+          if (!d.label || seen.has(d.label) || list.length >= 6) return;
+          seen.add(d.label);
+          list.push(d);
+        };
+        const top = asTyped[0];
+        if (top && !inZurich(top.lat, top.lon)) add(top);
+        for (const d of [...inZurichQuery, ...asTyped]) if (inZurich(d.lat, d.lon)) add(d);
         setResults(list);
       } catch {
         if (id === seq.current) setResults([]);
@@ -449,6 +467,7 @@ function Search({ onPick, current }: { onPick: (d: Dest) => void; current: Dest 
             <li key={`${r.label}${r.lat}`}>
               <button type="button" onClick={() => { onPick(r); setOpen(false); }} className="w-full px-3 py-2.5 text-left text-[14px] hover:bg-ground">
                 {r.label}
+                {!inZurich(r.lat, r.lon) ? <span className="ml-2 text-[12px] text-muted">outside Zurich</span> : null}
               </button>
             </li>
           ))}
