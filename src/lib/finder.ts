@@ -55,7 +55,7 @@ export function optionAt(spot: Spot, arrival: Wall): Option | null {
 }
 
 export type Answer = {
-  /** free for the whole stay, nearest first, one per street */
+  /** free for the whole stay, nearest first, one per street, at most 7 */
   fits: Option[];
   /** nothing fits: the nearest free option, however short */
   shorter: Option | null;
@@ -73,7 +73,7 @@ export function answer(spots: Spot[], arrival: Wall, stayMin: number): Answer {
       if (seen.has(key)) continue;
       seen.add(key);
       fits.push(o);
-      if (fits.length === 4) break;
+      if (fits.length === 7) break;
     } else if (!shorter) {
       shorter = o;
     }
@@ -117,3 +117,12 @@ export function laterToday(spots: Spot[], arrival: Wall): Moment[] {
   }
   return out.sort((a, b) => a.at - b.at);
 }
+
+/** What gets pasted into Google Maps. The data has no house numbers, and a
+ *  street name alone lands in the middle of the street — on a long one that
+ *  can be half a kilometre off. Coordinates land on the spot. */
+export const mapsText = (spot: Spot) => `${spot.lat.toFixed(5)}, ${spot.lon.toFixed(5)}`;
+
+/** Google Maps URLs, documented form: opens the app on a phone. */
+export const mapsLink = (spot: Spot) => `https://www.google.com/maps/search/?api=1&query=${spot.lat.toFixed(5)}%2C${spot.lon.toFixed(5)}`;
+

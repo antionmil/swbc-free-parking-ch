@@ -15,6 +15,20 @@ streets underneath in case it's full. Below that, a timeline of when it gets
 free later: blue zones need no disc from 19:00, most meters stop at 20:00,
 Sunday has no limit.
 
+**Every result copies straight into Google Maps.** People plan the drive in
+Maps, so each spot has "Copy for Google Maps" and "Open in Google Maps". The
+copy is the spot's coordinates (`47.37067, 8.54850`), not the street name: the
+city data has no house numbers, and a street name alone lands in the middle of
+the street — on a long one, half a kilometre from the spaces. The link uses
+the documented [Maps URLs](https://developers.google.com/maps/documentation/urls/get-started)
+form (`/maps/search/?api=1&query=lat%2Clng`), which needs no key and opens the
+Maps app on a phone.
+
+**The field takes a place or an address.** A pasted address works as it is —
+"Kunsthaus Zürich, Heimplatz 1, 8001 Zürich" resolves to Heimplatz 1 — and the
+phone keyboard's search key picks the first match. The page then lists up to
+seven free spots within 1 km, nearest first, one per street.
+
 No account, no app, no database, no AI. The page is static; all the work is
 done in the browser against one 141 KB file rebuilt every night.
 

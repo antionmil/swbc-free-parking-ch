@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { answer, laterToday, nearby, RADIUS, type DataFile, type Moment, type Option } from "@/lib/finder";
+import { answer, laterToday, mapsLink, mapsText, nearby, type DataFile, type Moment, type Option, type Spot } from "@/lib/finder";
 import { carsLabel, dayStart, dayWord, hhmm, isoDate, shortDay, wallFromDate, wallFromLocal, walkMinutes, type Wall } from "@/lib/rules";
 
 const MapStrip = dynamic(() => import("./MapStrip"), { ssr: false, loading: () => <div className="h-40 w-full rounded-2xl bg-rule" /> });
@@ -171,13 +171,21 @@ export default function Finder() {
 
           {result.fits.length > 1 ? (
             <section>
-              <p className="mb-1 mt-3 text-[11px] font-semibold uppercase tracking-[.14em] text-muted">If it&rsquo;s full</p>
+              <p className="mb-1 mt-3 text-[11px] font-semibold uppercase tracking-[.14em] text-muted">If it&rsquo;s full · more free parking nearby</p>
               {result.fits.slice(1).map((o) => (
-                <div key={`${o.spot.lat},${o.spot.lon}`} className="flex items-baseline justify-between gap-3 border-b border-rule py-2.5 text-[14px]">
-                  <span className="font-medium">{o.spot.street ?? "Unnamed street"}</span>
-                  <span className="text-right text-[12px] text-muted">
-                    {Math.round(o.spot.dist / 10) * 10} m · {o.spot.kind === "blue" ? "blue zone" : "no fee now"} · {carsLabel(o.spot.spaces)} · until {when(o.until, arrival)}
-                  </span>
+                <div key={`${o.spot.lat},${o.spot.lon}`} className="border-b border-rule py-2.5">
+                  <div className="flex items-baseline justify-between gap-3 text-[14px]">
+                    <span className="font-medium">{o.spot.street ?? "Unnamed street"}</span>
+                    <span className="text-right text-[12px] text-muted">
+                      {Math.round(o.spot.dist / 10) * 10} m · {o.spot.kind === "blue" ? "blue zone" : "no fee now"} · {carsLabel(o.spot.spaces)}
+                    </span>
+                  </div>
+                  <div className="mt-1 flex items-center justify-between gap-3">
+                    <span className="text-[12px] text-muted">
+                      {o.disc !== null ? `Disc ${hhmm(o.disc)} · ` : ""}until {when(o.until, arrival)}
+                    </span>
+                    <MapsButtons spot={o.spot} compact />
+                  </div>
                 </div>
               ))}
             </section>
@@ -225,6 +233,48 @@ function Instruction({ option, arrival }: { option: Option; arrival: Wall }) {
         )}
         <Step label={isBlue ? "Move the car by" : "Pay nothing until"} value={when(until, arrival)} small={dayWord(until, arrival) !== "today"} />
       </div>
+      <div className="mt-3">
+        <MapsButtons spot={spot} />
+      </div>
+    </div>
+  );
+}
+
+/* Copy the exact spot for Google Maps, or open it there directly. On a phone
+ * the link opens the Maps app; the copy is for people who plan on a laptop and
+ * paste into the Maps search box. */
+function MapsButtons({ spot, compact }: { spot: Spot; compact?: boolean }) {
+  const [copied, setCopied] = useState<"idle" | "done" | "failed">("idle");
+  const text = mapsText(spot);
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied("done");
+    } catch {
+      setCopied("failed");
+    }
+    setTimeout(() => setCopied("idle"), 2500);
+  };
+  const label = copied === "done" ? "Copied" : copied === "failed" ? text : compact ? "Copy" : "Copy for Google Maps";
+  return (
+    <div className={`flex flex-wrap items-center gap-2 ${compact ? "justify-end" : ""}`}>
+      <button
+        type="button"
+        onClick={copy}
+        aria-label={`Copy ${text} for Google Maps`}
+        className={`rounded-lg font-semibold ${compact ? "border border-rule bg-card px-2.5 py-1 text-[12px] text-ink" : "bg-ink px-3.5 py-2 text-[14px] text-white"}`}
+      >
+        {label}
+      </button>
+      <a
+        href={mapsLink(spot)}
+        target="_blank"
+        rel="noopener noreferrer"
+        className={`rounded-lg font-semibold ${compact ? "px-1 py-1 text-[12px] text-blue" : "border border-rule bg-card px-3.5 py-2 text-[14px] text-ink"}`}
+      >
+        {compact ? "Maps" : "Open in Google Maps"}
+      </a>
+      {!compact ? <span className="w-full text-[12px] text-muted">Pastes as {text} — the exact spot, not just the street.</span> : null}
     </div>
   );
 }
@@ -373,20 +423,26 @@ function Search({ onPick, current }: { onPick: (d: Dest) => void; current: Dest 
 
   return (
     <div className="relative">
+      <form
+        role="search"
+        onSubmit={(e) => {
+          e.preventDefault();
+          if (results[0]) { onPick(results[0]); setOpen(false); (document.activeElement as HTMLElement | null)?.blur(); }
+        }}
+      >
       <label htmlFor="dest" className="sr-only">Where are you going in Zurich?</label>
       <input
         id="dest"
         value={q}
         onChange={(e) => { setQ(e.target.value); setOpen(true); }}
         onFocus={() => setOpen(true)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" && results[0]) { onPick(results[0]); setOpen(false); }
-          if (e.key === "Escape") setOpen(false);
-        }}
-        placeholder="Where are you going in Zurich?"
+        onKeyDown={(e) => { if (e.key === "Escape") setOpen(false); }}
+        placeholder="Where are you going? A place or an address"
         autoComplete="off"
+        enterKeyHint="search"
         className="w-full rounded-xl border border-rule bg-card px-3 py-2.5 text-[15px] text-ink placeholder:text-muted"
       />
+      </form>
       {open && results.length ? (
         <ul className="absolute z-[1000] mt-1 w-full overflow-hidden rounded-xl border border-rule bg-card shadow-lg" role="listbox">
           {results.map((r) => (
