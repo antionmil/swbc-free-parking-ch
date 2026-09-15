@@ -1,6 +1,7 @@
-# Rebuild public/data/zurich.json from the City of Zurich's open data every
-# night, and commit it when it changed. The commit redeploys the site on
-# Vercel, so the page always carries the city's latest "stand" date.
+# Rebuild public/data/zurich.json (City of Zurich) and public/data/geneve.json
+# (Canton of Geneva, SITG) every night, and commit them when they changed. The
+# commit redeploys the site on Vercel. A city whose server fails keeps its old
+# file; the job still fails so it is seen.
 name: Refresh parking data
 
 on:
@@ -19,17 +20,18 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: 24
-      - name: Build the data file
+      - name: Build the data files
         run: node scripts/build-data.mjs
       - name: Check the rules and the new file before publishing
         run: |
           node --experimental-strip-types --no-warnings qa/rules.test.mjs
           node --experimental-strip-types --no-warnings qa/finder.test.mjs
+          node qa/geneva.test.mjs
       - name: Commit if it changed
         run: |
-          if git diff --quiet -- public/data/zurich.json; then echo "unchanged"; exit 0; fi
+          if git diff --quiet -- public/data; then echo "unchanged"; exit 0; fi
           git config user.name "parking-data-bot"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add public/data/zurich.json
-          git commit -m "data: Zurich parking, city stand $(node -e "console.log(require('./public/data/zurich.json').stand)")"
+          git add public/data
+          git commit -m "data: parking files, Zurich stand $(node -e "console.log(require('./public/data/zurich.json').stand)")"
           git push

@@ -42,7 +42,7 @@ export async function GET() {
       <div style={{ height: "100%", width: "100%", display: "flex", flexDirection: "column", justifyContent: "space-between", background: "#eef1f4", color: "#0f1720", padding: "72px", fontFamily: font ? "Display" : "sans-serif" }}>
         <div style={{ display: "flex", alignItems: "center", gap: 20 }}>
           <div style={{ display: "flex", width: 72, height: 72, borderRadius: 14, background: "#1a56b0", color: "#fff", fontSize: 52, alignItems: "center", justifyContent: "center" }}>P</div>
-          <div style={{ display: "flex", fontSize: 28, color: "#56616c", letterSpacing: 3 }}>FREE PARKING · ZURICH</div>
+          <div style={{ display: "flex", fontSize: 28, color: "#56616c", letterSpacing: 3 }}>FREE PARKING · ZURICH · GENEVA</div>
         </div>
         <div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
           <div style={{ display: "flex", fontSize: 76, lineHeight: 1.05 }}>Park on Steinwiesstrasse.</div>

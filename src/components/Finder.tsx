@@ -2,7 +2,8 @@
 
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { answer, laterToday, mapsLink, mapsText, nearby, type DataFile, type Moment, type Option, type Spot } from "@/lib/finder";
+import { answer, laterToday, mapsLink, mapsText, nearby, type DataFile, type Kind, type Moment, type Option, type Spot } from "@/lib/finder";
+import { cityFor, CITIES } from "@/lib/cities";
 import { carsLabel, dayStart, dayWord, hhmm, isoDate, shortDay, wallFromDate, wallFromLocal, walkMinutes, type Wall } from "@/lib/rules";
 
 const MapStrip = dynamic(() => import("./MapStrip"), { ssr: false, loading: () => <div className="h-40 w-full rounded-2xl bg-rule" /> });
@@ -10,21 +11,20 @@ const MapStrip = dynamic(() => import("./MapStrip"), { ssr: false, loading: () =
 /** `city` comes from the search when it knows it. It beats the rectangle
  *  below: Wallisellen's Glatt centre sits inside the rectangle but is another
  *  town, with no city of Zurich parking data. */
-type Dest = { label: string; lat: number; lon: number; city?: string };
+type Dest = { label: string; lat: number; lon: number; city?: string; state?: string };
 
-const isZurichCity = (d: Dest) => (d.city ? /^Zürich$/i.test(d.city) : inZurich(d.lat, d.lon));
-
-/* The city of Zurich, generously: a destination outside it gets an honest
- * "not covered yet" instead of an empty answer. */
-const ZURICH = { s: 47.32, n: 47.44, w: 8.44, e: 8.63 };
-const inZurich = (lat: number, lon: number) => lat > ZURICH.s && lat < ZURICH.n && lon > ZURICH.w && lon < ZURICH.e;
+const covered = (d: Dest) => cityFor(d) !== null;
+const COVERED_NAMES = CITIES.map((c) => c.name).join(" and ");
+const COVERED_OR = CITIES.map((c) => c.name).join(" or ");
 
 const EXAMPLES: Dest[] = [
-  { label: "Kunsthaus Zürich", lat: 47.37022, lon: 8.54798 },
-  { label: "Letzigrund", lat: 47.3828, lon: 8.5039 },
-  { label: "Zoo Zürich", lat: 47.38783, lon: 8.57727 },
-  { label: "Hardbrücke", lat: 47.3852, lon: 8.51711 },
+  { label: "Kunsthaus Zürich", lat: 47.37022, lon: 8.54798, city: "Zürich" },
+  { label: "Letzigrund", lat: 47.3828, lon: 8.5039, city: "Zürich" },
+  { label: "Plainpalais, Genève", lat: 46.19788, lon: 6.14062, city: "Genève", state: "Genève" },
+  { label: "Bains des Pâquis, Genève", lat: 46.2101, lon: 6.1537, city: "Genève", state: "Genève" },
 ];
+
+const KIND_LABEL: Record<Kind, string> = { blue: "blue zone", paid: "no fee now", free: "free, no time limit", limited: "free with a disc" };
 
 const STAYS = [
   { key: "60", label: "1 hour" },
@@ -37,7 +37,8 @@ type StayKey = (typeof STAYS)[number]["key"];
 /** "All evening" means until midnight, at least an hour. */
 const stayMinutes = (key: StayKey, arrival: Wall) => (key === "evening" ? Math.max(60, dayStart(arrival) + 1440 - arrival) : Number(key));
 
-function when(w: Wall, from: Wall) {
+function when(w: Wall | null, from: Wall) {
+  if (w === null) return "no time limit";
   const word = dayWord(w, from);
   if (word === "today") return hhmm(w);
   if (word === "tomorrow") return `${hhmm(w)} tomorrow`;
@@ -58,7 +59,7 @@ function cleanLabel(html: string) {
 }
 
 export default function Finder() {
-  const [data, setData] = useState<DataFile | null>(null);
+  const [files, setFiles] = useState<Record<string, DataFile>>({});
   const [loadError, setLoadError] = useState(false);
   const [dest, setDest] = useState<Dest | null>(null);
   /* No clock during the static build. The page is prerendered once; a time
@@ -71,13 +72,17 @@ export default function Finder() {
   const [editingTime, setEditingTime] = useState(false);
   const [copied, setCopied] = useState(false);
 
-  // Load the city file once. It is static and rebuilt every night.
+  // Load a city's file the first time a destination needs it. Static, rebuilt every night.
+  const city = dest ? cityFor(dest) : null;
   useEffect(() => {
-    fetch("/data/zurich.json")
+    if (!city || files[city.id]) return;
+    setLoadError(false);
+    fetch(city.file)
       .then((r) => (r.ok ? r.json() : Promise.reject()))
-      .then(setData)
+      .then((json: DataFile) => setFiles((f) => ({ ...f, [city.id]: json })))
       .catch(() => setLoadError(true));
-  }, []);
+  }, [city, files]);
+  const data = city ? files[city.id] ?? null : null;
 
   // "Now" keeps moving while the page is open.
   useEffect(() => {
@@ -108,8 +113,8 @@ export default function Finder() {
   const arrival = picked ?? nowWall ?? 0;
   const clockReady = picked !== null || nowWall !== null;
   const minutes = stayMinutes(stay, arrival);
-  const covered = dest ? isZurichCity(dest) : true;
-  const spots = useMemo(() => (data && dest && covered ? nearby(data, [dest.lat, dest.lon]) : []), [data, dest, covered]);
+  const isCovered = dest ? covered(dest) : true;
+  const spots = useMemo(() => (data && dest && isCovered ? nearby(data, [dest.lat, dest.lon]) : []), [data, dest, isCovered]);
   const result = useMemo(() => answer(spots, arrival, minutes), [spots, arrival, minutes]);
   const moments = useMemo(() => laterToday(spots, arrival).filter((m) => m.at > arrival), [spots, arrival]);
   const best = result.fits[0] ?? null;
@@ -163,10 +168,12 @@ export default function Finder() {
         <p className="rounded-2xl bg-card p-4 text-[14px] text-red" role="alert">The parking data did not load. Refresh the page to try again.</p>
       ) : !dest ? (
         <Empty onPick={setDest} />
-      ) : !covered ? (
+      ) : !isCovered ? (
         <div className="rounded-2xl bg-card p-5">
-          <h2 className="text-[20px] font-bold">Only Zurich so far.</h2>
-          <p className="mt-1 text-[14px] text-body">{dest.label} is outside the city of Zurich. Other Swiss cities come next, city by city, as their open data allows.</p>
+          <h2 className="text-[20px] font-bold">{COVERED_NAMES} so far.</h2>
+          <p className="mt-1 text-[14px] text-body">
+            {dest.label} is not in a city with published street-parking data yet. A city is added when its open data says where every space is and what kind it is.
+          </p>
         </div>
       ) : !data || !clockReady ? (
         <div className="h-48 animate-pulse rounded-2xl bg-card" aria-label="Loading parking data" />
@@ -176,7 +183,7 @@ export default function Finder() {
         <Nothing spots={spots.length} stayLabel={STAYS.find((s) => s.key === stay)!.label} arrival={arrival} shorter={result.shorter} />
       )}
 
-      {dest && covered && data && clockReady ? (
+      {dest && isCovered && data && clockReady ? (
         <>
           <MapStrip dest={[dest.lat, dest.lon]} chosen={best ?? result.shorter} others={result.fits.slice(1)} />
 
@@ -188,12 +195,12 @@ export default function Finder() {
                   <div className="flex items-baseline justify-between gap-3 text-[14px]">
                     <span className="font-medium">{o.spot.street ?? "Unnamed street"}</span>
                     <span className="text-right text-[12px] text-muted">
-                      {Math.round(o.spot.dist / 10) * 10} m · {o.spot.kind === "blue" ? "blue zone" : "no fee now"} · {carsLabel(o.spot.spaces)}
+                      {Math.round(o.spot.dist / 10) * 10} m · {o.spot.kind === "limited" ? `free with a disc, ${durationLabel(o.spot.maxMin)}` : KIND_LABEL[o.spot.kind]} · {carsLabel(o.spot.spaces)}
                     </span>
                   </div>
                   <div className="mt-1 flex items-center justify-between gap-3">
                     <span className="text-[12px] text-muted">
-                      {o.disc !== null ? `Disc ${hhmm(o.disc)} · ` : ""}until {when(o.until, arrival)}
+                      {o.disc !== null ? `Disc ${hhmm(o.disc)} · ` : ""}{o.until === null ? "no time limit" : `until ${when(o.until, arrival)}`}
                     </span>
                     <MapsButtons spot={o.spot} compact />
                   </div>
@@ -215,34 +222,48 @@ export default function Finder() {
       <p className="mt-3 border-t border-rule pt-3 text-[12px] leading-relaxed text-muted">
         Shows where free parking is allowed, not whether a space is empty — no city publishes that. The sign on the street always wins.
         Public holidays are treated like working days, so on a holiday you may have longer than this says.
-        {data ? ` City of Zurich parking data from ${data.stand.split("-").reverse().join(".")} (CC0).` : ""} Map and address search © swisstopo. Place search © OpenStreetMap contributors, via Photon.
+        {data && city ? ` ${city.credit}, ${data.dated === "fetched" ? "fetched" : "from"} ${data.stand.split("-").reverse().join(".")}.` : ""} Map and address search © swisstopo. Place search © OpenStreetMap contributors, via Photon.
       </p>
     </div>
   );
 }
 
+const durationLabel = (min: number | null) => (min === null ? "" : min % 60 === 0 ? `${min / 60} h` : `${min} min`);
+
 function Instruction({ option, arrival }: { option: Option; arrival: Wall }) {
   const { spot, disc, until } = option;
   const isBlue = spot.kind === "blue";
   const dist = Math.round(spot.dist / 10) * 10;
+  const kicker =
+    spot.kind === "blue" ? "Blue zone"
+    : spot.kind === "paid" ? "Paid space, no fee now"
+    : spot.kind === "free" ? "Free, no time limit"
+    : `Free with a disc, ${durationLabel(spot.maxMin)}`;
+  const place = spot.kind === "blue" ? "blue zone" : spot.kind === "paid" ? "paid spaces" : "free spaces";
   return (
     <div className={`rounded-[18px] p-4 ${isBlue ? "bg-blue-soft" : "bg-green-soft"}`}>
       <div className="flex items-center gap-2">
         <span className={`grid h-7 w-7 flex-none place-items-center rounded-md text-[17px] font-extrabold text-white ${isBlue ? "bg-blue" : "bg-green"}`}>P</span>
         <span className="text-[12px] text-muted">
-          {isBlue ? "Blue zone" : "Paid space, no fee now"} · {dist} m · about {walkMinutes(spot.dist)} min walk · {carsLabel(spot.spaces)}
+          {kicker} · {dist} m · about {walkMinutes(spot.dist)} min walk · {carsLabel(spot.spaces)}
         </span>
       </div>
       <h2 className="mb-2.5 mt-1.5 text-[26px] font-bold leading-[1.1] tracking-[-.01em]">
-        {spot.street ? `Park on ${spot.street}.` : `Park in the ${isBlue ? "blue zone" : "paid spaces"} ${dist} m away.`}
+        {spot.street ? `Park on ${spot.street}.` : `Park in the ${place} ${dist} m away.`}
       </h2>
       <div className="grid grid-cols-2 gap-2">
-        {isBlue ? (
-          <Step label="Set your disc to" value={disc === null ? "No disc needed" : hhmm(disc)} small={disc === null} />
-        ) : (
+        {spot.kind === "paid" ? (
           <Step label="Time limit" value="Check the sign" small />
+        ) : spot.kind === "free" ? (
+          <Step label="Parking disc" value="Not needed" small />
+        ) : (
+          <Step label="Set your disc to" value={disc === null ? "No disc needed" : hhmm(disc)} small={disc === null} />
         )}
-        <Step label={isBlue ? "Move the car by" : "Pay nothing until"} value={when(until, arrival)} small={dayWord(until, arrival) !== "today"} />
+        {spot.kind === "free" ? (
+          <Step label="Move the car by" value="No time limit" small />
+        ) : (
+          <Step label={spot.kind === "paid" ? "Pay nothing until" : "Move the car by"} value={when(until, arrival)} small={until === null || dayWord(until, arrival) !== "today"} />
+        )}
       </div>
       <div className="mt-3">
         <MapsButtons spot={spot} />
@@ -303,12 +324,12 @@ function Nothing({ spots, stayLabel, arrival, shorter }: { spots: number; stayLa
   return (
     <div className="rounded-[18px] bg-card p-4">
       <h2 className="text-[22px] font-bold leading-tight">
-        {spots === 0 ? "No free parking in the city data within 1 km." : `Nothing free for ${stayLabel.toLowerCase()} here at ${hhmm(arrival)}.`}
+        {spots === 0 ? "No free parking in the data within 1 km." : `Nothing free for ${stayLabel.toLowerCase()} here at ${hhmm(arrival)}.`}
       </h2>
       {shorter ? (
         <p className="mt-2 text-[14px] text-body">
-          Shorter works: {shorter.spot.street ?? "a blue zone"}, {Math.round(shorter.spot.dist / 10) * 10} m away
-          {shorter.disc !== null ? `, disc ${hhmm(shorter.disc)}` : ""}, until {when(shorter.until, arrival)}.
+          Shorter works: {shorter.spot.street ?? KIND_LABEL[shorter.spot.kind]}, {Math.round(shorter.spot.dist / 10) * 10} m away
+          {shorter.disc !== null ? `, disc ${hhmm(shorter.disc)}` : ""}, {shorter.until === null ? "no time limit" : `until ${when(shorter.until, arrival)}`}.
         </p>
       ) : spots === 0 ? (
         <p className="mt-2 text-[14px] text-body">Try a place a little further from the centre, or another time.</p>
@@ -391,7 +412,7 @@ const NOISE_VALUE = /^(platform|tram_stop|bus_stop|subway_entrance|stop_position
 
 type PhotonFeature = {
   geometry: { coordinates: [number, number] };
-  properties: { name?: string; street?: string; housenumber?: string; postcode?: string; city?: string; osm_key?: string; osm_value?: string; countrycode?: string };
+  properties: { name?: string; street?: string; housenumber?: string; postcode?: string; city?: string; state?: string; osm_key?: string; osm_value?: string; countrycode?: string };
 };
 
 async function searchPlaces(text: string): Promise<Dest[]> {
@@ -406,7 +427,7 @@ async function searchPlaces(text: string): Promise<Dest[]> {
       const street = [p.street, p.housenumber].filter(Boolean).join(" ");
       const where = [street, [p.postcode, p.city].filter(Boolean).join(" ")].filter(Boolean).join(", ");
       const label = p.name ? (where ? `${p.name}, ${where}` : p.name) : where;
-      return { label, lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0], city: p.city };
+      return { label, lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0], city: p.city, state: p.state };
     })
     .filter((d) => d.label);
 }
@@ -467,7 +488,7 @@ function Search({ onPick, current }: { onPick: (d: Dest) => void; current: Dest 
         if (id !== seq.current) return;
         const seen = new Set<string>();
         const list: Dest[] = [];
-        for (const d of [...zurichAddresses.filter(isZurichCity), ...addresses.filter(isZurichCity), ...places, ...addresses]) {
+        for (const d of [...zurichAddresses.filter(covered), ...addresses.filter(covered), ...places, ...addresses]) {
           const k = d.label.toLowerCase().replace(/[,\s]+/g, " ");
           if (!d.label || seen.has(k)) continue;
           seen.add(k);
@@ -523,7 +544,7 @@ function Search({ onPick, current }: { onPick: (d: Dest) => void; current: Dest 
                     broke "outside Zurich" across two lines, and "Zurich" alone under
                     "…4001 Basel" read as the place's town. */}
                 <span className="block">{r.label}</span>
-                {!isZurichCity(r) ? <span className="mt-0.5 block text-[12px] text-muted">Not in Zurich — no parking data there yet</span> : null}
+                {!covered(r) ? <span className="mt-0.5 block text-[12px] text-muted">Not in {COVERED_OR} — no parking data there yet</span> : null}
               </button>
             </li>
           ))}

@@ -1,4 +1,4 @@
-# Free parking in Zurich — day 13 of 26
+# Free parking in Zurich and Geneva — day 13 of 26
 
 Type where you're going. See where you can park for free at that time, what to
 set on your parking disc, when to move the car — and, later in the day, when
@@ -31,6 +31,50 @@ seven free spots within 1 km, nearest first, one per street.
 
 No account, no app, no database, no AI. The page is static; all the work is
 done in the browser against one 141 KB file rebuilt every night.
+
+## Cities: Zurich and Geneva, and why not the others yet
+
+The page picks the city from the destination — no city picker. A city is added
+only when its official open data says where every space is and what kind it
+is. Checked on day 13:
+
+| City | Street-parking data | Verdict |
+|---|---|---|
+| **Zurich** | City of Zurich DAV layers, daily, CC0 | live |
+| **Geneva** (whole canton) | SITG `OTC_STATIONNEMENT_V_PUBLIQUE`, every stretch with type and places; free to reuse with the source named, commercial use needs permission | live |
+| Basel | `Parkflächen` on data.bs.ch is current, but 0 of 7,815 records have a position; the full geodata is ordered by email from the canton's shop | not yet — needs that order |
+| Bern | only permit-card zones published, no spaces | no data |
+| Lausanne | a 2016 dataset; opendata.swiss refused automated requests, not inspected | unverified |
+| Winterthur, Lucerne, St. Gallen, Lugano | no space-level dataset found | no data |
+| OpenStreetMap, any city | Overpass count on day 13: 0–4 streets per city with any parking rule mapped | cannot say where parking is free |
+
+## Geneva
+
+| SITG type | Places | What the page does |
+|---|---|---|
+| Gratuit 60 min | 27,198 | blue zone — the national disc rules; Geneva's [Fondation des Parkings](https://www.geneve-parking.ch/fr/faq/voie-publique/zones-bleues-et-disque-de-stationnement) states the same hours, lunch rule and night rule |
+| Gratuit illimité | 2,210 | **free, no time limit** — no disc, no move-by time |
+| Gratuit 30/120/180/240 min, 8/15 heures | 5,820 | free with a disc for that long. The hours the limit applies are not in the data, so it counts as always on: the answer can only be stricter than the sign |
+| Payant … | ~5,200 | dropped — no paid hours in the data |
+| Gratuit jaune, Habitant / nuit, Police, 2 roues, Vélos, … | — | dropped |
+
+**The street names in the Geneva data are a third wrong.** 4,333 of 12,731
+stretches are named "Route de Foliaz" — a road in Collonge-Bellerive — while
+lying all over the canton. The first build told someone at Rue du Rhône to
+"Park on Route de Foliaz". Every name is now checked against the canton's
+official street graph (`GMO_GRAPHE_VOIES_OFFICIELLES`): placeholders and empty
+names take the nearest official street within 45 m (1,949 on day 13), and any
+other name more than 300 m from its own street is replaced the same way (13).
+Official names write surnames in capitals ("Quai WILSON"); the page writes
+"Quai Wilson", as Google Maps does.
+
+SITG rows carry no date, so the page says "fetched" with the build date, not
+"from".
+
+**Also caught in the browser, not by the unit tests:** the place search asks
+for German names, so Geneva comes back as "Genf". The first coverage check
+only accepted "Genève" and sent Plainpalais to "not covered". Every language
+form is accepted now, and `qa/finder.test.mjs` checks "Genf".
 
 ## Why Zurich first
 
@@ -83,8 +127,7 @@ nobody to a ticket** — an earlier "move by", never a later one:
 ## Tests — each attacked, not just run
 
 ```
-pnpm test                                                        # 32 rule checks
-node --experimental-strip-types --no-warnings qa/finder.test.mjs # 12 checks on the real data
+pnpm test    # 32 rule checks, 28 finder checks on both real data files, 13 Geneva mapping checks
 node qa/contrast.mjs                                             # every text colour ≥ 4.5:1 on its surface
 ```
 
@@ -96,9 +139,11 @@ node qa/contrast.mjs                                             # every text co
 
 ## The data refresh
 
-`.github/workflows/data.yml` runs `scripts/build-data.mjs` at 02:30 UTC, runs
-both test files against the new file, and commits `public/data/zurich.json`
-only if it changed. The commit redeploys on Vercel. If the city's WFS fails,
+`.github/workflows/data.yml` runs `scripts/build-data.mjs` at 02:30 UTC for
+both cities, runs every test file against the new files, and commits
+`public/data/` only if it changed. Geneva's file carries its fetch date, so it
+changes — and redeploys — once a day. A city whose server fails keeps its old
+file and fails the job; the other city still updates. The commit redeploys on Vercel. If the city's WFS fails,
 the job fails and the site keeps serving yesterday's file with yesterday's
 date on it.
 
@@ -142,6 +187,7 @@ no City of Zurich parking data.
 | swisstopo grey national map tiles | free, no key; credit "© swisstopo" on the map |
 | Photon (place search) | free, no key; "please be fair — extensive usage will be throttled", no availability guarantee; OpenStreetMap data, credited on the page |
 | City of Zurich open data | CC0 |
+| SITG (Canton of Geneva) | free reuse with the source named; commercial use needs prior permission — this site is free, and credits "source: SITG" |
 
 The browser calls swisstopo directly; this site has no server code except the
 share image at `/api/og`.

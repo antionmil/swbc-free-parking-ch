@@ -1,30 +1,44 @@
 /* From the data file and a destination to what the page says. Pure, like
  * rules.ts: the page only renders what these functions return. */
 import {
-  blue, blueLimited, dayStart, metres, minuteOfDay, nextBlueStart, nextPaidStart, paid, paidEnds, paidNow,
+  blue, blueLimited, dayStart, discTime, metres, minuteOfDay, nextBlueStart, nextPaidStart, paid, paidEnds, paidNow,
   weekday, type Schedule, type Wall,
 } from "./rules.ts";
 
 export type DataFile = {
   city: string;
+  /** the city's own data date, or the day it was fetched when the source has none */
   stand: string;
+  dated?: "stand" | "fetched";
   source: string;
   streets: string[];
   schedules: Schedule[];
-  spots: [number, number, 0 | 1, number, number, number][];
+  /** [lat, lon, kind, spaces, street index, extra]
+   *  kind 0 blue zone · 1 paid (extra = schedule index) · 2 free, no limit ·
+   *  3 free with a disc for `extra` minutes */
+  spots: [number, number, 0 | 1 | 2 | 3, number, number, number][];
 };
+
+export type Kind = "blue" | "paid" | "free" | "limited";
+const KINDS: Kind[] = ["blue", "paid", "free", "limited"];
 
 export type Spot = {
   lat: number;
   lon: number;
-  kind: "blue" | "paid";
+  kind: Kind;
   spaces: number;
   street: string | null;
   schedule: Schedule | null;
+  /** only for "limited": how long the disc allows */
+  maxMin: number | null;
   dist: number;
 };
 
-export type Option = { spot: Spot; disc: Wall | null; until: Wall };
+/** `until` is null when there is no time limit at all. */
+export type Option = { spot: Spot; disc: Wall | null; until: Wall | null };
+
+/** No limit is longer than any stay the page offers. */
+const NO_LIMIT = 7 * 1440;
 
 /** How far a driver will walk for free parking. Past this, the page says so
  *  rather than sending someone 2 km. */
@@ -34,11 +48,17 @@ export function nearby(data: DataFile, dest: [number, number], radius = RADIUS):
   const out: Spot[] = [];
   // Cheap box first: at Zurich's latitude 0.01° lat ≈ 1.1 km, 0.01° lon ≈ 750 m.
   const dLat = radius / 111000, dLon = radius / 75000;
-  for (const [lat, lon, k, spaces, si, sch] of data.spots) {
+  for (const [lat, lon, k, spaces, si, extra] of data.spots) {
     if (Math.abs(lat - dest[0]) > dLat || Math.abs(lon - dest[1]) > dLon) continue;
     const dist = metres(dest, [lat, lon]);
     if (dist > radius) continue;
-    out.push({ lat, lon, kind: k === 0 ? "blue" : "paid", spaces, street: si >= 0 ? data.streets[si] : null, schedule: sch >= 0 ? data.schedules[sch] : null, dist });
+    const kind = KINDS[k];
+    out.push({
+      lat, lon, kind, spaces, dist,
+      street: si >= 0 ? data.streets[si] : null,
+      schedule: kind === "paid" && extra >= 0 ? data.schedules[extra] : null,
+      maxMin: kind === "limited" && extra > 0 ? extra : null,
+    });
   }
   return out.sort((a, b) => a.dist - b.dist);
 }
@@ -48,6 +68,13 @@ export function optionAt(spot: Spot, arrival: Wall): Option | null {
   if (spot.kind === "blue") {
     const b = blue(arrival);
     return { spot, disc: b.disc, until: b.until };
+  }
+  if (spot.kind === "free") return { spot, disc: null, until: null };
+  if (spot.kind === "limited") {
+    if (!spot.maxMin) return null;
+    // The hours this limit applies are not in the data: count it as always on.
+    const d = discTime(arrival);
+    return { spot, disc: d, until: d + spot.maxMin };
   }
   if (!spot.schedule) return null;
   const p = paid(spot.schedule, arrival);
@@ -67,8 +94,9 @@ export function answer(spots: Spot[], arrival: Wall, stayMin: number): Answer {
   let shorter: Option | null = null;
   for (const spot of spots) {
     const o = optionAt(spot, arrival);
-    if (!o || o.until <= arrival) continue;
-    if (o.until - arrival >= stayMin) {
+    if (!o || (o.until !== null && o.until <= arrival)) continue;
+    const length = o.until === null ? NO_LIMIT : o.until - arrival;
+    if (length >= stayMin) {
       const key = `${spot.kind}|${spot.street ?? `${spot.lat},${spot.lon}`}`;
       if (seen.has(key)) continue;
       seen.add(key);
@@ -125,4 +153,3 @@ export const mapsText = (spot: Spot) => `${spot.lat.toFixed(5)}, ${spot.lon.toFi
 
 /** Google Maps URLs, documented form: opens the app on a phone. */
 export const mapsLink = (spot: Spot) => `https://www.google.com/maps/search/?api=1&query=${spot.lat.toFixed(5)}%2C${spot.lon.toFixed(5)}`;
-
