@@ -519,8 +519,11 @@ function Search({ onPick, current }: { onPick: (d: Dest) => void; current: Dest 
           {results.map((r) => (
             <li key={`${r.label}${r.lat}`}>
               <button type="button" onClick={() => { onPick(r); setOpen(false); }} className="w-full px-3 py-2.5 text-left text-[14px] hover:bg-ground">
-                {r.label}
-                {!isZurichCity(r) ? <span className="ml-2 text-[12px] text-muted">outside Zurich</span> : null}
+                {/* The note gets its own line. Inline after a long address, a phone
+                    broke "outside Zurich" across two lines, and "Zurich" alone under
+                    "…4001 Basel" read as the place's town. */}
+                <span className="block">{r.label}</span>
+                {!isZurichCity(r) ? <span className="mt-0.5 block text-[12px] text-muted">Not in Zurich — no parking data there yet</span> : null}
               </button>
             </li>
           ))}
