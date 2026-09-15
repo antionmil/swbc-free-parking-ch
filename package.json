@@ -11,7 +11,7 @@
     "build:check": "NEXT_DIST_DIR=.next-build next build",
     "dev:webpack": "NODE_OPTIONS=--max-old-space-size=2048 next dev --webpack",
     "data": "node scripts/build-data.mjs",
-    "test": "node --experimental-strip-types --no-warnings qa/rules.test.mjs && node --experimental-strip-types --no-warnings qa/finder.test.mjs && node qa/geneva.test.mjs"
+    "test": "node --experimental-strip-types --no-warnings qa/rules.test.mjs && node --experimental-strip-types --no-warnings qa/finder.test.mjs && node qa/mapping.test.mjs"
   },
   "dependencies": {
     "@vercel/analytics": "^2.0.1",

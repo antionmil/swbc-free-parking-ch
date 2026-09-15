@@ -5,6 +5,14 @@
  *
  *   public/data/zurich.json   City of Zurich, DAV parking layers (CC0)
  *   public/data/geneve.json   Canton of Geneva, SITG OTC_STATIONNEMENT_V_PUBLIQUE
+ *   public/data/bern.json     City of Bern, Geoportal Parkplaetze_oeffentlich (blue zone layer)
+ *   public/data/luzern.json   City of Lucerne, OGD oeffentlicher_parkplatz
+ *   public/data/lausanne.json City of Lausanne, map.lausanne.ch stationnement layers
+ *
+ * Bern, Lucerne and Lausanne publish no street names with their parking, so
+ * those are taken from OpenStreetMap streets (Overpass, once a night, credited
+ * on the page), the same nearest-street method Zurich uses with its own
+ * street register.
  *
  * A city that fails does not stop the others; the job still exits 1 so the
  * failure is seen. Each file keeps its own "refuse a sudden drop" guard.
@@ -35,6 +43,19 @@ const WFS = "https://www.ogd.stadt-zuerich.ch/wfs/geoportal";
 const layer = (service, name) =>
   `${WFS}/${service}?SERVICE=WFS&VERSION=1.1.0&REQUEST=GetFeature&TYPENAME=${name}&OUTPUTFORMAT=GeoJSON&SRSNAME=EPSG:4326`;
 
+async function fetchText(url, init = {}) {
+  for (let attempt = 1; attempt <= 3; attempt++) {
+    try {
+      const res = await fetch(url, { ...init, headers: { "user-agent": "freeparking.onedaybuilt.com data build", ...(init.headers ?? {}) } });
+      if (!res.ok) throw new Error(`${res.status}`);
+      return await res.text();
+    } catch (err) {
+      if (attempt === 3) throw new Error(`${url.slice(0, 120)} failed: ${err.message}`);
+      await new Promise((r) => setTimeout(r, 8000 * attempt));
+    }
+  }
+}
+
 async function get(url, { allowEmpty = false } = {}) {
   for (let attempt = 1; attempt <= 3; attempt++) {
     try {
@@ -58,6 +79,7 @@ const { mx: MX, my: MY } = scaleAt(47.37);
 const xy = xyAt(47.37);
 
 function flatten(coords, out = []) {
+  if (!Array.isArray(coords) || coords.length === 0) return out;
   if (typeof coords[0] === "number") out.push(coords);
   else for (const c of coords) flatten(c, out);
   return out;
@@ -363,6 +385,224 @@ async function buildGeneve() {
   };
 }
 
+
+/* ---------- Shared for cities without street names ---------- */
+
+/** swisstopo's approximate LV95 → WGS84 formulas, accurate to about a metre. */
+export function lv95ToWgs84(e, n) {
+  const y = (e - 2600000) / 1e6, x = (n - 1200000) / 1e6;
+  const lon = 2.6779094 + 4.728982 * y + 0.791484 * y * x + 0.1306 * y * x * x - 0.0436 * y * y * y;
+  const lat = 16.9023892 + 3.238272 * x - 0.270978 * y * y - 0.002528 * x * x - 0.0447 * y * y * x - 0.014 * x * x * x;
+  return [(lon * 100) / 36, (lat * 100) / 36];
+}
+
+/** A WFS asked for EPSG:4326 may answer [lat, lon] (Bern) or [lon, lat]
+ *  (Lucerne). In Switzerland the two ranges never overlap — latitude 45.8–47.9,
+ *  longitude 5.9–10.5 — so the numbers say which is which. */
+export const lonLat = ([a, b]) => (a > 20 ? [b, a] : [a, b]);
+
+/** Middle of a feature: the average of its vertices, as [lon, lat]. */
+function middleOf(coords, convert = lonLat) {
+  const pts = flatten(coords).filter((p) => p.length >= 2 && p.every(Number.isFinite)).map(convert);
+  // One Bern stretch has an empty shape: an average of nothing is NaN, and a
+  // NaN spot would sit in the file, unreachable and unexplained.
+  if (pts.length === 0) return null;
+  return [pts.reduce((t, p) => t + p[0], 0) / pts.length, pts.reduce((t, p) => t + p[1], 0) / pts.length];
+}
+
+/** Named OpenStreetMap streets in a box, as a nearest-street function. */
+async function osmStreetNamer(box, lat0) {
+  const query = `[out:json][timeout:180];way["highway"]["name"](${box.s},${box.w},${box.n},${box.e});out geom;`;
+  const text = await fetchText("https://overpass-api.de/api/interpreter", {
+    method: "POST",
+    headers: { "content-type": "application/x-www-form-urlencoded" },
+    body: `data=${encodeURIComponent(query)}`,
+  });
+  // Cars do not park on footpaths: a "Passage" or a square's footway 15 m away
+  // must not name a stretch that lies on the road beside it.
+  const NOT_FOR_CARS = /^(footway|path|pedestrian|steps|cycleway|bridleway|corridor|platform|track|elevator|via_ferrata|proposed|construction)$/;
+  const ways = JSON.parse(text).elements.filter((e) => e.type === "way" && e.geometry && e.tags?.name && !NOT_FOR_CARS.test(e.tags.highway ?? ""));
+  if (ways.length < 500) throw new Error(`only ${ways.length} named streets from OpenStreetMap — refusing to name spots from that`);
+  const toXY = xyAt(lat0);
+  const items = ways.map((w) => {
+    const line = w.geometry.map((g) => toXY([g.lon, g.lat]));
+    return { name: w.tags.name, pts: line, lines: [line] };
+  });
+  const near = grid(items);
+  return (lonlat) => {
+    const [x, y] = toXY(lonlat);
+    let best = null, bestD = 45;
+    for (const s of near(x, y, 1)) for (const line of s.lines) for (let i = 1; i < line.length; i++) {
+      const d = segDist([x, y], line[i - 1], line[i]);
+      if (d < bestD) { bestD = d; best = s.name; }
+    }
+    return best;
+  };
+}
+
+/** raw spots → the published file shape shared by every city after Zurich. */
+function cityFile({ city, source, raw, lat0, schedules = [] }) {
+  const spots = mergeSpots(raw, (r) => `${r.kind}|${r.street ?? "?"}|${r.maxMin ?? ""}|${r.schedule ? JSON.stringify(r.schedule) : ""}`);
+  const streetNames = [...new Set(spots.map((s) => s.street).filter(Boolean))].sort();
+  const scheduleKeys = [...new Set(spots.filter((s) => s.schedule).map((s) => JSON.stringify(s.schedule)))];
+  const { mx, my } = scaleAt(lat0);
+  const code = { blue: 0, paid: 1, free: 2, limited: 3 };
+  const out = {
+    city,
+    stand: new Date().toISOString().slice(0, 10),
+    dated: "fetched",
+    source,
+    streets: streetNames,
+    schedules: scheduleKeys.map((k) => JSON.parse(k)),
+    spots: spots.map((s) => [
+      +(s.y / my).toFixed(6),
+      +(s.x / mx).toFixed(6),
+      code[s.kind],
+      s.spaces,
+      s.street ? streetNames.indexOf(s.street) : -1,
+      s.kind === "limited" ? s.maxMin : s.kind === "paid" ? scheduleKeys.indexOf(JSON.stringify(s.schedule)) : -1,
+    ]),
+  };
+  const sum = (kind) => spots.filter((s) => s.kind === kind).reduce((a, s) => a + s.spaces, 0);
+  const summary = [
+    `blue zone: ${sum("blue")} places · free, no limit: ${sum("free")} · free with a limit: ${sum("limited")} · paid, free outside hours: ${sum("paid")}`,
+    `spots: ${spots.length}; unnamed: ${spots.filter((s) => !s.street).length}`,
+  ];
+  return { out, summary };
+}
+
+/* ---------- Bern ----------
+ * Geoportal Parkplaetze_oeffentlich. Only the blue zone layer is used
+ * ("P blau (APK)": the blue zone, where residents also have permit cards).
+ * White APK spaces, short-term white spaces and paid spaces carry no duration
+ * or hours in the data, so they are not offered. Positions are marked
+ * "ungenau" (approximate) for most stretches by the city itself. */
+const BERN_WFS = "https://map.bern.ch/arcgis/services/Geoportal/Parkplaetze_oeffentlich/MapServer/WFSServer";
+const BERN_BOX = { s: 46.91, w: 7.35, n: 46.99, e: 7.5 };
+
+async function buildBern() {
+  const features = await get(`${BERN_WFS}?service=WFS&version=2.0.0&request=GetFeature&typeNames=Geoportal_Parkplaetze_oeffentlich_2:Parkfeld_blau_APK&outputFormat=GEOJSON&srsName=urn:ogc:def:crs:EPSG::4326`);
+  const nameAt = await osmStreetNamer(BERN_BOX, 46.95);
+  const toXY = xyAt(46.95);
+  const raw = [];
+  for (const f of features) {
+    const pr = f.properties;
+    if (!f.geometry || pr.Status_beschrieb !== "Definitiv") continue;
+    const ll = middleOf(f.geometry.coordinates);
+    if (!ll) continue;
+    const [x, y] = toXY(ll);
+    raw.push({ kind: "blue", x, y, spaces: Math.max(1, pr.ANZAHL_PARKFELDER ?? 1), street: nameAt(ll) });
+  }
+  const file = cityFile({ city: "Bern", source: "City of Bern, Geoportal Parkplätze (öffentlich); street names © OpenStreetMap contributors", raw, lat0: 46.95 });
+  file.summary.unshift(`${features.length} blue zone stretches from the city`);
+  return file;
+}
+
+/* ---------- Lucerne ----------
+ * OGD oeffentlicher_parkplatz. Each car space has a type and an operating
+ * concept in words. Used:
+ *   blue zone            PP_TYP 2 with "Mo-Sa, 08:00-19:00, 60min"
+ *   free, no limit       "kein Regime, keine max. Zeit" and no fee
+ *   free with a disc     PP_TYP 0 (white, disc), no fee, ZEIT minutes
+ *   paid by day only     fee text "… 07.00-19.00, tägl." — free 19:00–07:00
+ * Anything with a remark (BEMERKUNG) is dropped: remarks are where the
+ * exceptions live ("Parkverbot Mo–Fr 06–18 ausgenommen …", "reserviert"). */
+const LUZERN_WFS = "https://map.stadtluzern.ch/server/services/OGD/oeffentlicher_parkplatz/MapServer/WFSServer";
+const LUZERN_BOX = { s: 47.0, w: 8.22, n: 47.09, e: 8.38 };
+
+export function luzernKind(pr) {
+  if (pr.SUBTYPE_TEXT !== "Auto-Parkplatz") return null;
+  if (pr.BEMERKUNG && String(pr.BEMERKUNG).trim() && String(pr.BEMERKUNG).trim() !== "null") return null;
+  const noFee = pr.GEBUEHR_TEXT == null || pr.GEBUEHR_TEXT === "Keine";
+  const concept = (pr.BETRIEBSKONZEPT_TEXT ?? "").trim();
+  if (pr.PP_TYP === 2 && /^Mo-Sa, 08[:.]00-19[:.]00, 60min$/.test(concept)) return { kind: "blue" };
+  if (concept === "kein Regime, keine max. Zeit" && noFee && (pr.PP_TYP === 0 || pr.PP_TYP == null)) return { kind: "free" };
+  if (pr.PP_TYP === 0 && noFee && Number(pr.ZEIT) >= 15 && Number(pr.ZEIT) < 4320) return { kind: "limited", maxMin: Number(pr.ZEIT) };
+  if (pr.PP_TYP === 1 && /07\.00-19\.00, tägl\.$/.test(pr.GEBUEHR_TEXT ?? "") && /^Tägl\. 07 - 19/.test(concept)) {
+    return { kind: "paid", schedule: { days: "Mo-So", from: 420, to: 1140, maxMin: Number(pr.ZEIT) || 0 } };
+  }
+  return null;
+}
+
+async function buildLuzern() {
+  const features = await get(`${LUZERN_WFS}?service=WFS&version=2.0.0&request=GetFeature&typeNames=${encodeURIComponent("esri:Öffentlicher_Parkplatz")}&outputFormat=GEOJSON&srsName=urn:ogc:def:crs:EPSG::4326`);
+  const nameAt = await osmStreetNamer(LUZERN_BOX, 47.05);
+  const toXY = xyAt(47.05);
+  const raw = [];
+  for (const f of features) {
+    const k = luzernKind(f.properties);
+    if (!k || !f.geometry) continue;
+    const ll = middleOf(f.geometry.coordinates);
+    if (!ll) continue;
+    const [x, y] = toXY(ll);
+    raw.push({ ...k, x, y, spaces: Math.max(1, f.properties.PP_ZAHL ?? 1), street: nameAt(ll) });
+  }
+  const file = cityFile({ city: "Lucerne", source: "City of Lucerne, OGD öffentliche Parkplätze; street names © OpenStreetMap contributors", raw, lat0: 47.05 });
+  file.summary.unshift(`${features.length} spaces and stretches from the city, ${raw.length} used`);
+  return file;
+}
+
+/* ---------- Lausanne ----------
+ * map.lausanne.ch WFS (GML only). Used:
+ *   "Zones bleues (macaron)"   blue zone for visitors — the national disc rules
+ *   "Zones blanches"           duree_max "Illimité" → free, no limit;
+ *                              "3h", "10h", … → free with a disc for that long
+ * Paid zones have a maximum stay but no paid hours in the data: dropped.
+ * Source to be named: Ville de Lausanne. */
+const LAUSANNE_WFS = "https://map.lausanne.ch/mapserv_proxy?ogcserver=source+for+image%2Fpng&SERVICE=WFS&VERSION=1.1.0&REQUEST=GetFeature&SRSNAME=EPSG:2056&TYPENAME=";
+const LAUSANNE_BOX = { s: 46.49, w: 6.56, n: 46.61, e: 6.73 };
+
+export function lausanneKind(type, duree) {
+  const t = (type ?? "").trim(), d = (duree ?? "").trim();
+  if (t === "Zones bleues (macaron)") return { kind: "blue" };
+  if (t === "Zones blanches") {
+    if (d === "Illimité") return { kind: "free" };
+    const m = /^(\d+)\s*(h|min)$/.exec(d);
+    if (m) return { kind: "limited", maxMin: +m[1] * (m[2] === "h" ? 60 : 1) };
+  }
+  return null;
+}
+
+/** The few GML shapes MapServer returns: members, their ms:* fields, and every coordinate pair. */
+export function parseGml(xml) {
+  return [...xml.matchAll(/<gml:featureMember>([\s\S]*?)<\/gml:featureMember>/g)].map(([, m]) => {
+    const props = Object.fromEntries([...m.matchAll(/<ms:([A-Za-z_0-9]+)>([^<]*)<\/ms:\1>/g)].map(([, k, v]) => [k, v]));
+    // The shape sits in <ms:geom> on map.lausanne.ch (<ms:msGeometry> on other
+    // MapServers): read every posList in the member. The bounding box uses
+    // lowerCorner/upperCorner, so it is not picked up.
+    const nums = [...m.matchAll(/<gml:(?:posList|pos|coordinates)[^>]*>([^<]+)</g)].flatMap(([, t]) => t.trim().split(/[\s,]+/).map(Number));
+    const pairs = [];
+    for (let i = 0; i + 1 < nums.length; i += 2) pairs.push([nums[i], nums[i + 1]]);
+    return { props, pairs };
+  });
+}
+
+async function buildLausanne() {
+  const layers = ["mobilite_stationnement_zbleuesmac", "mobilite_stationnement_zblanches"];
+  const members = [];
+  for (const l of layers) {
+    const xml = await fetchText(LAUSANNE_WFS + l);
+    const got = parseGml(xml);
+    if (l.endsWith("zbleuesmac") && got.length < 200) throw new Error(`only ${got.length} blue zone stretches from Lausanne`);
+    members.push(...got);
+  }
+  const nameAt = await osmStreetNamer(LAUSANNE_BOX, 46.52);
+  const toXY = xyAt(46.52);
+  const raw = [];
+  for (const { props, pairs } of members) {
+    const k = lausanneKind(props.type_txt, props.duree_max);
+    if (!k || pairs.length === 0) continue;
+    const pts = pairs.filter(([e, n]) => e > 2400000 && e < 2900000 && n > 1000000 && n < 1300000).map(([e, n]) => lv95ToWgs84(e, n));
+    if (pts.length === 0) continue;
+    const ll = [pts.reduce((t, p) => t + p[0], 0) / pts.length, pts.reduce((t, p) => t + p[1], 0) / pts.length];
+    const [x, y] = toXY(ll);
+    raw.push({ ...k, x, y, spaces: Math.max(1, Number(props.nb_places) || 1), street: nameAt(ll) });
+  }
+  const file = cityFile({ city: "Lausanne", source: "Ville de Lausanne, stationnement (map.lausanne.ch); street names © OpenStreetMap contributors", raw, lat0: 46.52 });
+  file.summary.unshift(`${members.length} stretches from the city, ${raw.length} used`);
+  return file;
+}
+
 /* ---------- Shared ---------- */
 
 function mergeSpots(raw, keyOf) {
@@ -389,8 +629,12 @@ function mergeSpots(raw, keyOf) {
 /* A bad night at a city's server must not become the published file. If the
    spot count falls by more than a third against the file already published,
    stop: the site keeps serving the old data, and the failed job is the alarm. */
-function publish(file, out) {
+export function publish(file, out) {
   const path = `public/data/${file}`;
+  // A first file has nothing to compare with, so an empty one would pass the
+  // drop check below. Day 13: Lausanne's first build read 1,210 stretches,
+  // used 0, and wrote a valid, empty file.
+  if (out.spots.length < 50) throw new Error(`${file}: only ${out.spots.length} spots — refusing to publish`);
   if (existsSync(path)) {
     const before = JSON.parse(readFileSync(path, "utf8")).spots.length;
     if (out.spots.length < before * 0.67) {
@@ -403,7 +647,13 @@ function publish(file, out) {
   return `${path} ${(json.length / 1024).toFixed(0)} KB`;
 }
 
-const CITIES = { zurich: { file: "zurich.json", build: buildZurich }, geneve: { file: "geneve.json", build: buildGeneve } };
+const CITIES = {
+  zurich: { file: "zurich.json", build: buildZurich },
+  geneve: { file: "geneve.json", build: buildGeneve },
+  bern: { file: "bern.json", build: buildBern },
+  luzern: { file: "luzern.json", build: buildLuzern },
+  lausanne: { file: "lausanne.json", build: buildLausanne },
+};
 
 async function main() {
   const only = process.argv[2];

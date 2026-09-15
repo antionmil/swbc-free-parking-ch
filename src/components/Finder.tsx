@@ -3,7 +3,7 @@
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { answer, laterToday, mapsLink, mapsText, nearby, type DataFile, type Kind, type Moment, type Option, type Spot } from "@/lib/finder";
-import { cityFor, CITIES } from "@/lib/cities";
+import { cityFor, cityList } from "@/lib/cities";
 import { carsLabel, dayStart, dayWord, hhmm, isoDate, shortDay, wallFromDate, wallFromLocal, walkMinutes, type Wall } from "@/lib/rules";
 
 const MapStrip = dynamic(() => import("./MapStrip"), { ssr: false, loading: () => <div className="h-40 w-full rounded-2xl bg-rule" /> });
@@ -14,14 +14,15 @@ const MapStrip = dynamic(() => import("./MapStrip"), { ssr: false, loading: () =
 type Dest = { label: string; lat: number; lon: number; city?: string; state?: string };
 
 const covered = (d: Dest) => cityFor(d) !== null;
-const COVERED_NAMES = CITIES.map((c) => c.name).join(" and ");
-const COVERED_OR = CITIES.map((c) => c.name).join(" or ");
+const COVERED_NAMES = cityList("and");
+const COVERED_OR = cityList("or");
 
 const EXAMPLES: Dest[] = [
   { label: "Kunsthaus Zürich", lat: 47.37022, lon: 8.54798, city: "Zürich" },
-  { label: "Letzigrund", lat: 47.3828, lon: 8.5039, city: "Zürich" },
   { label: "Plainpalais, Genève", lat: 46.19788, lon: 6.14062, city: "Genève", state: "Genève" },
-  { label: "Bains des Pâquis, Genève", lat: 46.2101, lon: 6.1537, city: "Genève", state: "Genève" },
+  { label: "Bundesplatz, Bern", lat: 46.94701, lon: 7.44416, city: "Bern" },
+  { label: "Place de la Riponne, Lausanne", lat: 46.52419, lon: 6.63319, city: "Lausanne" },
+  { label: "KKL Luzern", lat: 47.0503, lon: 8.31211, city: "Luzern" },
 ];
 
 const KIND_LABEL: Record<Kind, string> = { blue: "blue zone", paid: "no fee now", free: "free, no time limit", limited: "free with a disc" };
@@ -416,7 +417,8 @@ type PhotonFeature = {
 };
 
 async function searchPlaces(text: string): Promise<Dest[]> {
-  const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(text)}&lat=47.3769&lon=8.5417&limit=15&lang=de&bbox=5.95,45.81,10.50,47.81`;
+  // Limited to Switzerland, no bias to one city: five cities are covered now.
+  const url = `https://photon.komoot.io/api/?q=${encodeURIComponent(text)}&limit=15&lang=de&bbox=5.95,45.81,10.50,47.81`;
   const res = await fetch(url);
   if (!res.ok) throw new Error(`photon ${res.status}`);
   const json = (await res.json()) as { features?: PhotonFeature[] };
@@ -433,7 +435,7 @@ async function searchPlaces(text: string): Promise<Dest[]> {
 }
 
 async function searchAddresses(text: string): Promise<Dest[]> {
-  const url = `https://api3.geo.admin.ch/rest/services/api/SearchServer?type=locations&origins=address&sr=4326&limit=6&searchText=${encodeURIComponent(text)}`;
+  const url = `https://api3.geo.admin.ch/rest/services/api/SearchServer?type=locations&origins=address&sr=4326&limit=30&searchText=${encodeURIComponent(text)}`;
   const res = await fetch(url);
   const json = (await res.json()) as { results?: { attrs: { label: string; lat: number; lon: number } }[] };
   return (json.results ?? []).map((r) => {
@@ -477,18 +479,15 @@ function Search({ onPick, current }: { onPick: (d: Dest) => void; current: Dest 
           searchPlaces(text).catch(() => [] as Dest[]),
           hasNumber ? searchAddresses(text).catch(() => [] as Dest[]) : Promise.resolve([] as Dest[]),
         ]);
-        /* "Bahnhofstrasse 1" exists in hundreds of Swiss towns, and as typed
-           it came back as Goldau, Eschenz, Elgg. If the text names no town
-           that any result is in, the visitor almost certainly means Zurich:
-           ask swisstopo again with "Zürich" and list those first. If it does
-           name a town ("… Winterthur"), leave it alone. */
-        const lower = text.toLowerCase();
-        const namesATown = /z(ü|ue|u)rich/.test(lower) || [...places, ...addresses].some((d) => d.city && d.city.length > 2 && lower.includes(d.city.toLowerCase()));
-        const zurichAddresses = hasNumber && !namesATown ? await searchAddresses(`${text} Zürich`).catch(() => [] as Dest[]) : [];
         if (id !== seq.current) return;
+        /* "Bahnhofstrasse 1" exists in hundreds of Swiss towns. Addresses in a
+           covered city come first; places keep the search's own ranking, and a
+           place outside the covered cities stays visible, marked. (The first
+           version asked again with "Zürich" appended — right for one city,
+           wrong for five.) */
         const seen = new Set<string>();
         const list: Dest[] = [];
-        for (const d of [...zurichAddresses.filter(covered), ...addresses.filter(covered), ...places, ...addresses]) {
+        for (const d of [...addresses.filter(covered), ...places, ...addresses]) {
           const k = d.label.toLowerCase().replace(/[,\s]+/g, " ");
           if (!d.label || seen.has(k)) continue;
           seen.add(k);

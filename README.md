@@ -1,4 +1,4 @@
-# Free parking in Zurich and Geneva — day 13 of 26
+# Free parking in Swiss cities — day 13 of 26
 
 Type where you're going. See where you can park for free at that time, what to
 set on your parking disc, when to move the car — and, later in the day, when
@@ -32,21 +32,37 @@ seven free spots within 1 km, nearest first, one per street.
 No account, no app, no database, no AI. The page is static; all the work is
 done in the browser against one 141 KB file rebuilt every night.
 
-## Cities: Zurich and Geneva, and why not the others yet
+## Cities: five, and why not the others yet
 
 The page picks the city from the destination — no city picker. A city is added
 only when its official open data says where every space is and what kind it
-is. Checked on day 13:
+is. Found through `ckan.opendata.swiss` (the catalogue answers scripts there;
+`opendata.swiss` itself refuses them) and each city's own map service.
 
-| City | Street-parking data | Verdict |
-|---|---|---|
-| **Zurich** | City of Zurich DAV layers, daily, CC0 | live |
-| **Geneva** (whole canton) | SITG `OTC_STATIONNEMENT_V_PUBLIQUE`, every stretch with type and places; free to reuse with the source named, commercial use needs permission | live |
-| Basel | `Parkflächen` on data.bs.ch is current, but 0 of 7,815 records have a position; the full geodata is ordered by email from the canton's shop | not yet — needs that order |
-| Bern | only permit-card zones published, no spaces | no data |
-| Lausanne | a 2016 dataset; opendata.swiss refused automated requests, not inspected | unverified |
-| Winterthur, Lucerne, St. Gallen, Lugano | no space-level dataset found | no data |
-| OpenStreetMap, any city | Overpass count on day 13: 0–4 streets per city with any parking rule mapped | cannot say where parking is free |
+| City | Street-parking data | Places used | Verdict |
+|---|---|---|---|
+| **Zurich** | City of Zurich DAV layers, daily, CC0 | blue 25,036 · paid, free outside meter hours 6,100 | live |
+| **Geneva** (whole canton) | SITG `OTC_STATIONNEMENT_V_PUBLIQUE`; free reuse with the source named, commercial use needs permission | blue 27,198 · no limit 2,210 · with a limit 5,820 | live |
+| **Bern** | Geoportal `Parkplaetze_oeffentlich` WFS, blue zone layer; opendata.swiss "terms_open" | blue 11,112 | live |
+| **Lausanne** | `map.lausanne.ch` WFS, blue (macaron) and white zones; opendata.swiss "terms_by" | blue 6,099 · no limit 4 · with a limit 572 | live |
+| **Lucerne** | OGD `oeffentlicher_parkplatz` WFS; opendata.swiss "terms_open" | blue 1,562 · with a limit 1,026 · paid 07–19, free outside 242 | live |
+| Basel | the layer with blue zones ("Parkieren: Parkflächen") is category B, *beschränkt öffentlich*, behind a special login applied for by form; the open `Parkflächen` table has no positions; the free shop product "Parkierung" is special parking only | — | not possible without that login |
+| Biel, Zug, St. Gallen | datasets exist (Biel and Zug current, St. Gallen from 2023) | — | not built yet |
+| Winterthur, Lugano | no space-level dataset found | — | no data |
+| OpenStreetMap, any city | 0–4 streets per city with a parking rule mapped | — | cannot say where parking is free |
+
+**Street names for Bern, Lausanne and Lucerne come from OpenStreetMap.** Their
+parking data has none. Once a night the build asks Overpass for the named
+streets in each city's box and names a stretch after the nearest one within
+45 m, ignoring footpaths, pedestrian zones, steps and cycle paths — cars do not
+park on those. Unnamed stretches (Bern: 192 of 1,387) say "Park in the blue
+zone 150 m away" rather than guess. The page credits OpenStreetMap.
+
+**Positions.** Lausanne sends Swiss LV95 coordinates, converted with
+swisstopo's approximate formulas (0.36 m off at Bundesplatz 3, Bern, checked).
+Bern's and Lucerne's WFS both claim EPSG:4326 but send the axes in opposite
+orders; latitude and longitude ranges never overlap in Switzerland, so the
+numbers decide. Bern marks most of its own positions "ungenau" (approximate).
 
 ## Geneva
 
@@ -127,12 +143,17 @@ nobody to a ticket** — an earlier "move by", never a later one:
 ## Tests — each attacked, not just run
 
 ```
-pnpm test    # 32 rule checks, 28 finder checks on both real data files, 13 Geneva mapping checks
+pnpm test    # 32 rule checks, 48 finder checks on the real data files, 30 mapping checks
 node qa/contrast.mjs                                             # every text colour ≥ 4.5:1 on its surface
 ```
 
 - Breaking the lunch rule on purpose (14:30 → 14:00) made `rules.test.mjs`
   fail. Restored.
+- `build-data.mjs` refuses to publish a file with fewer than 50 spots — a
+  first file has nothing to compare with, and Lausanne's first build read
+  1,210 stretches, used 0 (its shapes sit in `<ms:geom>`, not where the reader
+  looked) and wrote a valid, empty file. Attacked with an empty file: refused,
+  nothing written.
 - `build-data.mjs` refuses to overwrite the published file when the spot count
   falls by more than a third. Attacked by tripling yesterday's count: exit 1,
   file untouched.
@@ -140,7 +161,7 @@ node qa/contrast.mjs                                             # every text co
 ## The data refresh
 
 `.github/workflows/data.yml` runs `scripts/build-data.mjs` at 02:30 UTC for
-both cities, runs every test file against the new files, and commits
+all five cities, runs every test file against the new files, and commits
 `public/data/` only if it changed. Geneva's file carries its fetch date, so it
 changes — and redeploys — once a day. A city whose server fails keeps its old
 file and fails the job; the other city still updates. The commit redeploys on Vercel. If the city's WFS fails,
@@ -187,6 +208,9 @@ no City of Zurich parking data.
 | swisstopo grey national map tiles | free, no key; credit "© swisstopo" on the map |
 | Photon (place search) | free, no key; "please be fair — extensive usage will be throttled", no availability guarantee; OpenStreetMap data, credited on the page |
 | City of Zurich open data | CC0 |
+| City of Bern, City of Lucerne (opendata.swiss "terms_open") | free use |
+| Ville de Lausanne (opendata.swiss "terms_by") | free use with the source named — credited on the page |
+| OpenStreetMap via Overpass (street names for Bern, Lausanne, Lucerne) | ODbL, credited; three queries a night |
 | SITG (Canton of Geneva) | free reuse with the source named; commercial use needs prior permission — this site is free, and credits "source: SITG" |
 
 The browser calls swisstopo directly; this site has no server code except the

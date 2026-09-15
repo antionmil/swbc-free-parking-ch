@@ -26,7 +26,7 @@ jobs:
         run: |
           node --experimental-strip-types --no-warnings qa/rules.test.mjs
           node --experimental-strip-types --no-warnings qa/finder.test.mjs
-          node qa/geneva.test.mjs
+          node qa/mapping.test.mjs
       - name: Commit if it changed
         run: |
           if git diff --quiet -- public/data; then echo "unchanged"; exit 0; fi

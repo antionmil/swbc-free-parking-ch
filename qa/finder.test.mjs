@@ -33,7 +33,7 @@ eq("Kunsthaus Tue 14:10 later", later, "blue-evening@19:00 paid-evening@20:00 su
 eq("Sat 18:40: no separate Sunday moment", laterToday(spots, at("2026-09-19", "18:40")).some((m) => m.kind === "sunday"), false);
 
 const far = nearby(data, [46.948, 7.4474]);
-eq("Bern: no spots", far.length, 0);
+eq("Zurich data near Bern: no spots", far.length, 0);
 
 // Nothing listed may be a paid space that is being charged at the time.
 const charged = answer(spots, at("2026-09-15", "10:00"), 30).fits.filter((o) => o.spot.kind === "paid");
@@ -70,6 +70,30 @@ eq("cityFor Zürich", cityFor({ lat: 47.37, lon: 8.54, city: "Zürich", state: "
 eq("cityFor Wallisellen: none", cityFor({ lat: 47.408, lon: 8.596, city: "Wallisellen", state: "Zürich" }), null);
 eq("cityFor Basel: none", cityFor({ lat: 47.556, lon: 7.590, city: "Basel", state: "Basel-Stadt" }), null);
 eq("cityFor a shared Geneva link (no town): by box", cityFor({ lat: 46.2, lon: 6.14 })?.id, "geneve");
+
+// ---- Bern, Lausanne, Lucerne: a real place each, a real answer ----
+for (const [file, label, dest, id, cityName] of [
+  ["bern.json", "Bundesplatz, Bern", [46.94701, 7.44416], "bern", "Bern"],
+  ["lausanne.json", "Place de la Riponne, Lausanne", [46.52419, 6.63319], "lausanne", "Lausanne"],
+  ["luzern.json", "KKL Luzern", [47.0503, 8.31211], "luzern", "Luzern"],
+]) {
+  const data = JSON.parse(readFileSync(`public/data/${file}`, "utf8"));
+  const near = nearby(data, dest);
+  eq(`${label}: spots within 1 km`, near.length > 0, true);
+  const ans = answer(near, at("2026-09-15", "14:10"), 60);
+  eq(`${label}: Tue 14:10 1 h fits`, ans.fits.length > 0, true);
+  eq(`${label}: nearest option has a street name`, Boolean(ans.fits[0]?.spot.street), true);
+  const b = ans.fits.find((o) => o.spot.kind === "blue");
+  if (b) eq(`${label}: blue zone move by`, hhmm(b.until), "15:30");
+  eq(`cityFor ${cityName}`, cityFor({ lat: dest[0], lon: dest[1], city: cityName })?.id, id);
+}
+const lz = JSON.parse(readFileSync("public/data/luzern.json", "utf8"));
+const lzPaid = nearby(lz, [lz.spots.find((s) => s[2] === 1)[0], lz.spots.find((s) => s[2] === 1)[1]], 50).find((s) => s.kind === "paid");
+eq("Lucerne 07-19 meter at 20:00: free", optionAt(lzPaid, at("2026-09-15", "20:00")) !== null, true);
+eq("… until 07:00", hhmm(optionAt(lzPaid, at("2026-09-15", "20:00")).until), "07:00");
+eq("… and not free at 10:00", optionAt(lzPaid, at("2026-09-15", "10:00")), null);
+eq("cityFor Kriens (next to Lucerne): none", cityFor({ lat: 47.035, lon: 8.28, city: "Kriens" }), null);
+eq("cityFor Ostermundigen (next to Bern): none", cityFor({ lat: 46.957, lon: 7.487, city: "Ostermundigen" }), null);
 
 console.log(bad ? `\n${bad} failed` : "\nall finder checks pass");
 process.exit(bad ? 1 : 0);
