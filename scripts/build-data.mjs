@@ -183,7 +183,8 @@ const main = async () => {
   const out = {
     city: "Zurich",
     stand,
-    built: new Date().toISOString(),
+    // No build timestamp: it would make every nightly run a "change" and
+    // redeploy the site even when the city's data is the same.
     source: "Stadt Zürich, Dienstabteilung Verkehr — öffentlich zugängliche Parkplätze DAV (CC0)",
     streets: streetNames,
     schedules: schedules.map((s) => JSON.parse(s)),

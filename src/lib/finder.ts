@@ -8,7 +8,6 @@ import {
 export type DataFile = {
   city: string;
   stand: string;
-  built: string;
   source: string;
   streets: string[];
   schedules: Schedule[];
