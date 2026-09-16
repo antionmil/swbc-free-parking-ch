@@ -279,12 +279,30 @@ function Instruction({ option, arrival }: { option: Option; arrival: Wall }) {
 function MapsButtons({ spot, compact }: { spot: Spot; compact?: boolean }) {
   const [copied, setCopied] = useState<"idle" | "done" | "failed">("idle");
   const text = mapsText(spot);
+  /* Two ways to copy, because the first is refused more often than it looks:
+     a browser inside another app can have the clipboard permission denied
+     outright (seen on the live site in an in-app browser, permission state
+     "denied"). The old execCommand path still works there. If both fail, the
+     button shows the text so it can be selected by hand. */
   const copy = async () => {
     try {
       await navigator.clipboard.writeText(text);
       setCopied("done");
     } catch {
-      setCopied("failed");
+      try {
+        const field = document.createElement("input");
+        field.value = text;
+        field.setAttribute("readonly", "");
+        field.style.cssText = "position:fixed;top:0;left:0;opacity:0";
+        document.body.appendChild(field);
+        field.select();
+        field.setSelectionRange(0, text.length);
+        const ok = document.execCommand("copy");
+        field.remove();
+        setCopied(ok ? "done" : "failed");
+      } catch {
+        setCopied("failed");
+      }
     }
     setTimeout(() => setCopied("idle"), 2500);
   };
@@ -307,7 +325,11 @@ function MapsButtons({ spot, compact }: { spot: Spot; compact?: boolean }) {
       >
         {compact ? "Maps" : "Open in Google Maps"}
       </a>
-      {!compact ? <span className="w-full text-[12px] text-muted">Pastes as {text} — the exact spot, not just the street.</span> : null}
+      {!compact ? (
+        <span className="w-full text-[12px] text-muted">
+          {copied === "failed" ? `Copy this: ${text}` : `Pastes as ${text} — the exact spot, not just the street.`}
+        </span>
+      ) : null}
     </div>
   );
 }
@@ -521,7 +543,7 @@ function Search({ onPick, current }: { onPick: (d: Dest) => void; current: Dest 
           if (results[0]) { onPick(results[0]); setOpen(false); (document.activeElement as HTMLElement | null)?.blur(); }
         }}
       >
-      <label htmlFor="dest" className="sr-only">Where are you going in Zurich?</label>
+      <label htmlFor="dest" className="sr-only">Where are you going?</label>
       <input
         id="dest"
         value={q}
