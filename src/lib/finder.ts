@@ -7,6 +7,8 @@ import {
 
 export type DataFile = {
   city: string;
+  /** true when spots are placed along their street, not at the exact space (Basel) */
+  approx?: boolean;
   /** the city's own data date, or the day it was fetched when the source has none */
   stand: string;
   dated?: "stand" | "fetched";
@@ -153,3 +155,29 @@ export const mapsText = (spot: Spot) => `${spot.lat.toFixed(5)}, ${spot.lon.toFi
 
 /** Google Maps URLs, documented form: opens the app on a phone. */
 export const mapsLink = (spot: Spot) => `https://www.google.com/maps/search/?api=1&query=${spot.lat.toFixed(5)}%2C${spot.lon.toFixed(5)}`;
+
+/* ---------- What the sign says, whatever time it is now ---------- */
+
+const clock = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+const daysWord = (d: Schedule["days"]) => (d === "Mo-Sa" ? "Mon–Sat" : "every day");
+
+/** The rule at a spot, independent of the moment asked about. Free right now
+ *  because it is Sunday is useful; knowing it is a blue zone on Tuesday is
+ *  what tells someone whether to come back. */
+export function ruleText(spot: Spot): string {
+  switch (spot.kind) {
+    case "blue":
+      return "Blue zone: 1 hour with a disc, Mon–Sat 08:00–19:00. Free with no limit outside those hours.";
+    case "limited": {
+      const min = spot.maxMin ?? 0;
+      const length = min % 60 === 0 ? `${min / 60} h` : `${min} min`;
+      return `White zone: free with a disc, ${length} at a time. The data does not say which hours that limit applies, so the page treats it as always.`;
+    }
+    case "paid":
+      return spot.schedule
+        ? `Paid ${daysWord(spot.schedule.days)} ${clock(spot.schedule.from)}–${clock(spot.schedule.to)}. Free outside those hours.`
+        : "Paid.";
+    case "free":
+      return "Free with no time limit, at any hour.";
+  }
+}

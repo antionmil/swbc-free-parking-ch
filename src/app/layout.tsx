@@ -7,7 +7,7 @@ const SITE = process.env.NEXT_PUBLIC_SITE_URL ?? "https://freeparking.onedaybuil
 export const metadata: Metadata = {
   metadataBase: new URL(SITE),
   title: "Free parking in Swiss cities",
-  description: "Zurich, Geneva, Bern, Lausanne and Lucerne: type where you're going. See where you can park for free right now, what to set on your parking disc, and when it gets free later.",
+  description: "Zurich, Geneva, Bern, Lausanne, Basel and Lucerne: type where you're going. See where you can park for free right now, what to set on your parking disc, and when it gets free later.",
   openGraph: {
     title: "Free parking in Swiss cities",
     description: "Where to park for free right now, what to set on your disc, and when to move the car.",

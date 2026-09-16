@@ -6,7 +6,7 @@
  * rules mapped anywhere in Switzerland). */
 
 export type City = {
-  id: "zurich" | "geneve" | "bern" | "luzern" | "lausanne";
+  id: "zurich" | "geneve" | "bern" | "luzern" | "lausanne" | "basel";
   name: string;
   file: string;
   /** a rough box, used when the search result carries no town or canton */
@@ -30,6 +30,7 @@ const GENEVE_BOX = { s: 46.12, n: 46.37, w: 5.95, e: 6.32 };
 const BERN_BOX = { s: 46.91, n: 46.99, w: 7.35, e: 7.5 };
 const LUZERN_BOX = { s: 47.0, n: 47.09, w: 8.22, e: 8.38 };
 const LAUSANNE_BOX = { s: 46.49, n: 46.61, w: 6.56, e: 6.73 };
+const BASEL_BOX = { s: 47.51, n: 47.61, w: 7.53, e: 7.68 };
 
 export const CITIES: City[] = [
   {
@@ -55,6 +56,11 @@ export const CITIES: City[] = [
     credit: "Ville de Lausanne parking data, street names © OpenStreetMap contributors",
   },
   {
+    id: "basel", name: "Basel", file: "/data/basel.json", box: BASEL_BOX,
+    covers: byCity(/^(Basel|Bâle|Basilea|Basle)$/i, BASEL_BOX),
+    credit: "Canton of Basel-Stadt parking data (CC BY), placed along the street with © OpenStreetMap contributors",
+  },
+  {
     id: "luzern", name: "Lucerne", file: "/data/luzern.json", box: LUZERN_BOX,
     covers: byCity(/^(Luzern|Lucerne|Lucerna)$/i, LUZERN_BOX),
     credit: "City of Lucerne parking data, street names © OpenStreetMap contributors",
@@ -63,7 +69,7 @@ export const CITIES: City[] = [
 
 export const cityFor = (d: { lat: number; lon: number; city?: string; state?: string }) => CITIES.find((c) => c.covers(d)) ?? null;
 
-/** "Zurich, Geneva, Bern, Lausanne and Lucerne" */
+/** "Zurich, Geneva, Bern, Lausanne, Basel and Lucerne" */
 export const cityList = (last = "and") => {
   const names = CITIES.map((c) => c.name);
   return `${names.slice(0, -1).join(", ")} ${last} ${names.at(-1)}`;

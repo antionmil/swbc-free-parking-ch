@@ -3,7 +3,7 @@
  * Needs public/data/zurich.json (pnpm data). Street names can change when the
  * city changes its data; the rule-shaped checks (times, kinds) must not. */
 import { readFileSync } from "node:fs";
-import { answer, laterToday, nearby, optionAt } from "../src/lib/finder.ts";
+import { answer, laterToday, nearby, optionAt, ruleText } from "../src/lib/finder.ts";
 import { cityFor } from "../src/lib/cities.ts";
 import { hhmm, wallFromLocal, dayName } from "../src/lib/rules.ts";
 
@@ -68,7 +68,9 @@ eq("cityFor German names (Photon lang=de): Genf", cityFor({ lat: 46.198, lon: 6.
 eq("cityFor Carouge (canton of Geneva)", cityFor({ lat: 46.184, lon: 6.140, city: "Carouge", state: "Genève" })?.id, "geneve");
 eq("cityFor Zürich", cityFor({ lat: 47.37, lon: 8.54, city: "Zürich", state: "Zürich" })?.id, "zurich");
 eq("cityFor Wallisellen: none", cityFor({ lat: 47.408, lon: 8.596, city: "Wallisellen", state: "Zürich" }), null);
-eq("cityFor Basel: none", cityFor({ lat: 47.556, lon: 7.590, city: "Basel", state: "Basel-Stadt" }), null);
+eq("cityFor Basel", cityFor({ lat: 47.556, lon: 7.590, city: "Basel", state: "Basel-Stadt" })?.id, "basel");
+eq("cityFor Bâle (French form)", cityFor({ lat: 47.556, lon: 7.590, city: "Bâle" })?.id, "basel");
+eq("cityFor Allschwil (next to Basel): none", cityFor({ lat: 47.552, lon: 7.535, city: "Allschwil" }), null);
 eq("cityFor a shared Geneva link (no town): by box", cityFor({ lat: 46.2, lon: 6.14 })?.id, "geneve");
 
 // ---- Bern, Lausanne, Lucerne: a real place each, a real answer ----
@@ -76,6 +78,7 @@ for (const [file, label, dest, id, cityName] of [
   ["bern.json", "Bundesplatz, Bern", [46.94701, 7.44416], "bern", "Bern"],
   ["lausanne.json", "Place de la Riponne, Lausanne", [46.52419, 6.63319], "lausanne", "Lausanne"],
   ["luzern.json", "KKL Luzern", [47.0503, 8.31211], "luzern", "Luzern"],
+  ["basel.json", "Barfüsserplatz, Basel", [47.5546, 7.5895], "basel", "Basel"],
 ]) {
   const data = JSON.parse(readFileSync(`public/data/${file}`, "utf8"));
   const near = nearby(data, dest);
@@ -94,6 +97,25 @@ eq("… until 07:00", hhmm(optionAt(lzPaid, at("2026-09-15", "20:00")).until), "
 eq("… and not free at 10:00", optionAt(lzPaid, at("2026-09-15", "10:00")), null);
 eq("cityFor Kriens (next to Lucerne): none", cityFor({ lat: 47.035, lon: 8.28, city: "Kriens" }), null);
 eq("cityFor Ostermundigen (next to Bern): none", cityFor({ lat: 46.957, lon: 7.487, city: "Ostermundigen" }), null);
+
+// Basel is street level and says so; its rule text must hold at any hour.
+const bs = JSON.parse(readFileSync("public/data/basel.json", "utf8"));
+eq("Basel file marked approximate", bs.approx, true);
+const bsSpots = nearby(bs, [47.5546, 7.5895]);
+const bsBlue = bsSpots.find((s) => s.kind === "blue");
+eq("Basel: a blue zone near Barfüsserplatz", Boolean(bsBlue), true);
+eq("Basel blue zone rule reads the same at 03:00 as at 15:00", ruleText(bsBlue), "Blue zone: 1 hour with a disc, Mon–Sat 08:00–19:00. Free with no limit outside those hours.");
+const bsPaid = bsSpots.find((s) => s.kind === "paid" && s.schedule?.days === "Mo-Sa");
+if (bsPaid) eq("Basel paid rule names its hours", ruleText(bsPaid).startsWith("Paid Mon–Sat"), true);
+
+// The rule shown does not depend on the time asked about.
+const zh = JSON.parse(readFileSync("public/data/zurich.json", "utf8"));
+const zhPaid = nearby(zh, kunsthaus).find((s) => s.kind === "paid");
+eq("Zurich paid rule", ruleText(zhPaid), "Paid Mon–Sat 09:00–20:00. Free outside those hours.");
+const gvFree = nearby(geneve, [geneve.spots.find((s) => s[2] === 2)[0], geneve.spots.find((s) => s[2] === 2)[1]], 50).find((s) => s.kind === "free");
+eq("Geneva free rule", ruleText(gvFree), "Free with no time limit, at any hour.");
+const gvLim = nearby(geneve, [lim[0], lim[1]], 50).find((s) => s.kind === "limited" && s.maxMin === 180);
+eq("Geneva 3 h rule names the limit", ruleText(gvLim).startsWith("White zone: free with a disc, 3 h at a time."), true);
 
 console.log(bad ? `\n${bad} failed` : "\nall finder checks pass");
 process.exit(bad ? 1 : 0);

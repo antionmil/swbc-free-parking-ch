@@ -2,7 +2,7 @@
 
 import dynamic from "next/dynamic";
 import { useEffect, useMemo, useRef, useState } from "react";
-import { answer, laterToday, mapsLink, mapsText, nearby, type DataFile, type Kind, type Moment, type Option, type Spot } from "@/lib/finder";
+import { answer, laterToday, mapsLink, mapsText, nearby, ruleText, type DataFile, type Kind, type Moment, type Option, type Spot } from "@/lib/finder";
 import { cityFor, cityList } from "@/lib/cities";
 import { carsLabel, dayStart, dayWord, hhmm, isoDate, shortDay, wallFromDate, wallFromLocal, walkMinutes, type Wall } from "@/lib/rules";
 
@@ -11,7 +11,17 @@ const MapStrip = dynamic(() => import("./MapStrip"), { ssr: false, loading: () =
 /** `city` comes from the search when it knows it. It beats the rectangle
  *  below: Wallisellen's Glatt centre sits inside the rectangle but is another
  *  town, with no city of Zurich parking data. */
-type Dest = { label: string; lat: number; lon: number; city?: string; state?: string };
+type Dest = {
+  label: string;
+  lat: number;
+  lon: number;
+  city?: string;
+  state?: string;
+  /** shown on its own line in the list: the place first, the address under it */
+  name?: string;
+  where?: string;
+  icon?: string;
+};
 
 const covered = (d: Dest) => cityFor(d) !== null;
 const COVERED_NAMES = cityList("and");
@@ -22,6 +32,7 @@ const EXAMPLES: Dest[] = [
   { label: "Plainpalais, Genève", lat: 46.19788, lon: 6.14062, city: "Genève", state: "Genève" },
   { label: "Bundesplatz, Bern", lat: 46.94701, lon: 7.44416, city: "Bern" },
   { label: "Place de la Riponne, Lausanne", lat: 46.52419, lon: 6.63319, city: "Lausanne" },
+  { label: "Barfüsserplatz, Basel", lat: 47.5546, lon: 7.5895, city: "Basel" },
   { label: "KKL Luzern", lat: 47.0503, lon: 8.31211, city: "Luzern" },
 ];
 
@@ -179,20 +190,26 @@ export default function Finder() {
       ) : !data || !clockReady ? (
         <div className="h-48 animate-pulse rounded-2xl bg-card" aria-label="Loading parking data" />
       ) : best ? (
-        <Instruction option={best} arrival={arrival} />
+        <Instruction option={best} arrival={arrival} approx={data.approx} />
       ) : (
         <Nothing spots={spots.length} stayLabel={STAYS.find((s) => s.key === stay)!.label} arrival={arrival} shorter={result.shorter} />
       )}
 
       {dest && isCovered && data && clockReady ? (
         <>
-          <MapStrip dest={[dest.lat, dest.lon]} chosen={best ?? result.shorter} others={result.fits.slice(1)} />
+          <MapStrip dest={[dest.lat, dest.lon]} chosen={best ?? result.shorter} others={result.fits.slice(1)} approx={data.approx} />
+          <p className="-mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-[12px] text-muted">
+            <span className="flex items-center gap-1"><i className="h-2.5 w-2.5 rounded-full bg-red" />where you are going</span>
+            <span className="flex items-center gap-1"><i className="h-2.5 w-2.5 rounded-full bg-blue" />blue zone</span>
+            <span className="flex items-center gap-1"><i className="h-2.5 w-2.5 rounded-full bg-green" />free or no fee now</span>
+            <span>tap a dot for the rule there</span>
+          </p>
 
           {result.fits.length > 1 ? (
             <section>
               <p className="mb-1 mt-3 text-[11px] font-semibold uppercase tracking-[.14em] text-muted">If it&rsquo;s full · more free parking nearby</p>
               {result.fits.slice(1).map((o) => (
-                <div key={`${o.spot.lat},${o.spot.lon}`} className="border-b border-rule py-2.5">
+                <div key={`${o.spot.kind}|${o.spot.street}|${o.spot.lat},${o.spot.lon}`} className="border-b border-rule py-2.5">
                   <div className="flex items-baseline justify-between gap-3 text-[14px]">
                     <span className="font-medium">{o.spot.street ?? "Unnamed street"}</span>
                     <span className="text-right text-[12px] text-muted">
@@ -203,8 +220,9 @@ export default function Finder() {
                     <span className="text-[12px] text-muted">
                       {o.disc !== null ? `Disc ${hhmm(o.disc)} · ` : ""}{o.until === null ? "no time limit" : `until ${when(o.until, arrival)}`}
                     </span>
-                    <MapsButtons spot={o.spot} compact />
+                    <MapsButtons spot={o.spot} compact approx={data.approx} />
                   </div>
+                  <p className="mt-0.5 text-[12px] leading-snug text-muted">{ruleText(o.spot)}</p>
                 </div>
               ))}
             </section>
@@ -231,7 +249,7 @@ export default function Finder() {
 
 const durationLabel = (min: number | null) => (min === null ? "" : min % 60 === 0 ? `${min / 60} h` : `${min} min`);
 
-function Instruction({ option, arrival }: { option: Option; arrival: Wall }) {
+function Instruction({ option, arrival, approx }: { option: Option; arrival: Wall; approx?: boolean }) {
   const { spot, disc, until } = option;
   const isBlue = spot.kind === "blue";
   const dist = Math.round(spot.dist / 10) * 10;
@@ -250,7 +268,7 @@ function Instruction({ option, arrival }: { option: Option; arrival: Wall }) {
         </span>
       </div>
       <h2 className="mb-2.5 mt-1.5 text-[26px] font-bold leading-[1.1] tracking-[-.01em]">
-        {spot.street ? `Park on ${spot.street}.` : `Park in the ${place} ${dist} m away.`}
+        {spot.street ? `Park ${approx ? "along" : "on"} ${spot.street}.` : `Park in the ${place} ${dist} m away.`}
       </h2>
       <div className="grid grid-cols-2 gap-2">
         {spot.kind === "paid" ? (
@@ -266,8 +284,12 @@ function Instruction({ option, arrival }: { option: Option; arrival: Wall }) {
           <Step label={spot.kind === "paid" ? "Pay nothing until" : "Move the car by"} value={when(until, arrival)} small={until === null || dayWord(until, arrival) !== "today"} />
         )}
       </div>
+      <p className="mt-3 text-[13px] leading-snug text-body">
+        <span className="font-semibold">The rule here: </span>{ruleText(spot)}
+        {approx ? " Basel publishes the street, not the exact space, so look along the street." : ""}
+      </p>
       <div className="mt-3">
-        <MapsButtons spot={spot} />
+        <MapsButtons spot={spot} approx={approx} />
       </div>
     </div>
   );
@@ -276,9 +298,11 @@ function Instruction({ option, arrival }: { option: Option; arrival: Wall }) {
 /* Copy the exact spot for Google Maps, or open it there directly. On a phone
  * the link opens the Maps app; the copy is for people who plan on a laptop and
  * paste into the Maps search box. */
-function MapsButtons({ spot, compact }: { spot: Spot; compact?: boolean }) {
+function MapsButtons({ spot, compact, approx }: { spot: Spot; compact?: boolean; approx?: boolean }) {
   const [copied, setCopied] = useState<"idle" | "done" | "failed">("idle");
-  const text = mapsText(spot);
+  /* Basel gives the street, not the space: copying a point would look exact
+     when it is not, so the street name goes to Maps instead. */
+  const text = approx && spot.street ? `${spot.street}, Basel` : mapsText(spot);
   /* Two ways to copy, because the first is refused more often than it looks:
      a browser inside another app can have the clipboard permission denied
      outright (seen on the live site in an in-app browser, permission state
@@ -318,7 +342,7 @@ function MapsButtons({ spot, compact }: { spot: Spot; compact?: boolean }) {
         {label}
       </button>
       <a
-        href={mapsLink(spot)}
+        href={approx && spot.street ? `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(`${spot.street}, Basel`)}` : mapsLink(spot)}
         target="_blank"
         rel="noopener noreferrer"
         className={`rounded-lg font-semibold ${compact ? "px-1 py-1 text-[12px] text-blue" : "border border-rule bg-card px-3.5 py-2 text-[14px] text-ink"}`}
@@ -327,7 +351,7 @@ function MapsButtons({ spot, compact }: { spot: Spot; compact?: boolean }) {
       </a>
       {!compact ? (
         <span className="w-full text-[12px] text-muted">
-          {copied === "failed" ? `Copy this: ${text}` : `Pastes as ${text} — the exact spot, not just the street.`}
+          {copied === "failed" ? `Copy this: ${text}` : approx ? `Pastes as ${text} — the street, which is what Basel publishes.` : `Pastes as ${text} — the exact spot, not just the street.`}
         </span>
       ) : null}
     </div>
@@ -401,11 +425,11 @@ function TimePicker({ value, isNow, onChange, onNow }: { value: Wall; isNow: boo
     <div className="flex flex-wrap items-end gap-2 rounded-2xl bg-card p-3">
       <label className="flex flex-col text-[12px] text-muted">
         Day
-        <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="mt-1 rounded-lg border border-rule px-2 py-1.5 text-[14px] text-ink" />
+        <input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="mt-1 rounded-lg border border-rule px-2 py-1.5 text-[16px] text-ink" />
       </label>
       <label className="flex flex-col text-[12px] text-muted">
         Arriving at
-        <input type="time" value={time} onChange={(e) => setTime(e.target.value)} className="mt-1 rounded-lg border border-rule px-2 py-1.5 text-[14px] text-ink" />
+        <input type="time" value={time} onChange={(e) => setTime(e.target.value)} className="mt-1 rounded-lg border border-rule px-2 py-1.5 text-[16px] text-ink" />
       </label>
       {!isNow ? (
         <button type="button" onClick={onNow} className="rounded-lg border border-rule px-3 py-1.5 text-[13px] text-body">Back to now</button>
@@ -429,6 +453,28 @@ function Empty({ onPick }: { onPick: (d: Dest) => void }) {
   );
 }
 
+/* A mark for the kind of place, so the list reads as places and not as a
+   column of addresses: the name is what someone recognises. Photos would need
+   a paid photo service, so this is what the free data can give. */
+const PLACE_ICON: [RegExp, string][] = [
+  [/^(restaurant|fast_food|cafe|bar|pub|biergarten|ice_cream)$/, "🍽"],
+  [/^(supermarket|convenience|bakery|butcher|greengrocer|deli)$/, "🛒"],
+  [/^(museum|gallery|artwork|attraction|viewpoint|theatre|arts_centre|castle|monument|memorial)$/, "🏛"],
+  [/^(hotel|hostel|guest_house|motel|apartment)$/, "🛏"],
+  [/^(hospital|clinic|doctors|pharmacy|dentist|veterinary)$/, "🏥"],
+  [/^(school|university|college|kindergarten|library)$/, "🎓"],
+  [/^(station|halt|aerodrome|terminal|bus_station|tram_stop)$/, "🚉"],
+  [/^(stadium|sports_centre|pitch|swimming_pool|swimming_area|fitness_centre|park|garden|zoo|theme_park)$/, "🏟"],
+  [/^(bank|atm|post_office|townhall|police|fire_station|government|courthouse)$/, "🏛"],
+  [/^(church|cathedral|chapel|mosque|synagogue|temple|place_of_worship)$/, "⛪"],
+  [/^(parking|fuel|charging_station|car_repair|car|car_rental)$/, "🅿️"],
+];
+const iconFor = (key?: string, value?: string) => {
+  for (const [re, icon] of PLACE_ICON) if (re.test(value ?? "") || re.test(key ?? "")) return icon;
+  if (key === "shop" || key === "office" || key === "craft") return "🏬";
+  return "📍";
+};
+
 /* OpenStreetMap features that are never a destination someone types. */
 const NOISE = /^(emergency|highway|barrier|power|man_made|landuse|boundary)$/;
 const NOISE_VALUE = /^(platform|tram_stop|bus_stop|subway_entrance|stop_position|atm|bicycle_rental|vending_machine|waste_basket|bench|telephone|post_box|recycling|parking_entrance|board|charging_station)$/;
@@ -451,7 +497,11 @@ async function searchPlaces(text: string): Promise<Dest[]> {
       const street = [p.street, p.housenumber].filter(Boolean).join(" ");
       const where = [street, [p.postcode, p.city].filter(Boolean).join(" ")].filter(Boolean).join(", ");
       const label = p.name ? (where ? `${p.name}, ${where}` : p.name) : where;
-      return { label, lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0], city: p.city, state: p.state };
+      return {
+        label, lat: f.geometry.coordinates[1], lon: f.geometry.coordinates[0], city: p.city, state: p.state,
+        name: p.name || where, where: p.name ? where : [p.postcode, p.city].filter(Boolean).join(" "),
+        icon: iconFor(p.osm_key, p.osm_value),
+      };
     })
     .filter((d) => d.label);
 }
@@ -464,7 +514,8 @@ async function searchAddresses(text: string): Promise<Dest[]> {
     const label = cleanLabel(r.attrs.label);
     // "Hohlstrasse 201 8004 Zürich": the town is what follows the postcode.
     const city = /\b\d{4}\s+(.+)$/.exec(label)?.[1];
-    return { label, lat: r.attrs.lat, lon: r.attrs.lon, city };
+    const cut = label.match(/^(.*?)(\s\d{4}\s.+)$/);
+    return { label, lat: r.attrs.lat, lon: r.attrs.lon, city, name: cut?.[1] ?? label, where: cut?.[2]?.trim(), icon: "📍" };
   });
 }
 
@@ -553,7 +604,7 @@ function Search({ onPick, current }: { onPick: (d: Dest) => void; current: Dest 
         placeholder="Where are you going? A shop, a place, a street"
         autoComplete="off"
         enterKeyHint="search"
-        className="w-full rounded-xl border border-rule bg-card px-3 py-2.5 text-[15px] text-ink placeholder:text-muted"
+        className="w-full rounded-xl border border-rule bg-card px-3 py-2.5 text-[16px] text-ink placeholder:text-muted"
       />
       </form>
       {open && results.length ? (
@@ -564,8 +615,14 @@ function Search({ onPick, current }: { onPick: (d: Dest) => void; current: Dest 
                 {/* The note gets its own line. Inline after a long address, a phone
                     broke "outside Zurich" across two lines, and "Zurich" alone under
                     "…4001 Basel" read as the place's town. */}
-                <span className="block">{r.label}</span>
-                {!covered(r) ? <span className="mt-0.5 block text-[12px] text-muted">Not in {COVERED_OR} — no parking data there yet</span> : null}
+                <span className="flex gap-2">
+                  <span aria-hidden className="w-5 flex-none text-[15px] leading-tight">{r.icon ?? "📍"}</span>
+                  <span className="min-w-0">
+                    <span className="block font-medium leading-tight">{r.name ?? r.label}</span>
+                    {r.where ? <span className="mt-0.5 block text-[12px] leading-tight text-muted">{r.where}</span> : null}
+                    {!covered(r) ? <span className="mt-0.5 block text-[12px] leading-tight text-muted">No parking data for this town yet</span> : null}
+                  </span>
+                </span>
               </button>
             </li>
           ))}

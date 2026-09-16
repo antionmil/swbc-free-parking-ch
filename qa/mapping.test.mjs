@@ -1,6 +1,6 @@
 /* Each city's data mapping, attacked with the real type strings from its data.
  *   node qa/mapping.test.mjs */
-import { genevaKind, readableName, luzernKind, lausanneKind, parseGml, lv95ToWgs84, lonLat } from "../scripts/build-data.mjs";
+import { genevaKind, readableName, luzernKind, lausanneKind, parseGml, lv95ToWgs84, lonLat, baselKind, baselSchedule } from "../scripts/build-data.mjs";
 
 let bad = 0;
 const eq = (label, got, want) => { const g = JSON.stringify(got), w = JSON.stringify(want); if (g !== w) bad++; console.log(`${g === w ? "ok  " : "FAIL"} ${label}: ${g}${g === w ? "" : `  (want ${w})`}`); };
@@ -40,6 +40,15 @@ const gml = `<gml:featureMember><ms:x><gml:boundedBy><gml:Envelope><gml:lowerCor
 const parsed = parseGml(gml);
 eq("GML: shape inside <ms:geom> is read, bounding box ignored", parsed[0].pairs, [[2537026.8, 1152049.2], [2537036.9, 1152048.2]]);
 eq("GML: fields", parsed[0].props.nb_places, "2");
+
+// Basel
+eq("Basel blue zone", baselKind({ typ: "Blaue Zone" }), { kind: "blue" });
+eq("Basel unmanaged space", baselKind({ typ: "Parkplätze unbewirtschaftet" }), { kind: "free" });
+eq("Basel paid Mo-Sa 08-19 → free outside", baselKind({ typ: "Parkplätze gebührenpflichtig", gebpflicht: "MO-SA: 08:00-19:00" }), { kind: "paid", schedule: { days: "Mo-Sa", from: 480, to: 1140, maxMin: 0 } });
+eq("Basel paid around the clock dropped", baselKind({ typ: "Parkplätze gebührenpflichtig", gebpflicht: "MO-SO: 00:00-24:00" }), null);
+eq("Basel night-only fee shape dropped", baselSchedule("MO-FR: 19:00-06:00 / SA,SO: 00:00-24:00"), null);
+eq("Basel time-limited without a duration dropped", baselKind({ typ: "Parkplätze mit Zeitbeschränkung", maxparkz: null }), null);
+eq("Basel bikes dropped", baselKind({ typ: "Velos" }), null);
 
 // Coordinates
 const [lon, lat] = lv95ToWgs84(2600423.25, 1199521.125); // Bundesplatz 3, Bern — swisstopo gives 46.946774, 7.444192

@@ -410,19 +410,30 @@ function middleOf(coords, convert = lonLat) {
   return [pts.reduce((t, p) => t + p[0], 0) / pts.length, pts.reduce((t, p) => t + p[1], 0) / pts.length];
 }
 
-/** Named OpenStreetMap streets in a box, as a nearest-street function. */
-async function osmStreetNamer(box, lat0) {
+/** Named OpenStreetMap streets in a box, fetched once per box.
+ *  Cars do not park on footpaths: a "Passage" or a square's footway 15 m away
+ *  must not name a stretch that lies on the road beside it. */
+const osmCache = new Map();
+const NOT_FOR_CARS = /^(footway|path|pedestrian|steps|cycleway|bridleway|corridor|platform|track|elevator|via_ferrata|proposed|construction)$/;
+
+async function osmWays(box) {
+  const key = JSON.stringify(box);
+  if (osmCache.has(key)) return osmCache.get(key);
   const query = `[out:json][timeout:180];way["highway"]["name"](${box.s},${box.w},${box.n},${box.e});out geom;`;
   const text = await fetchText("https://overpass-api.de/api/interpreter", {
     method: "POST",
     headers: { "content-type": "application/x-www-form-urlencoded" },
     body: `data=${encodeURIComponent(query)}`,
   });
-  // Cars do not park on footpaths: a "Passage" or a square's footway 15 m away
-  // must not name a stretch that lies on the road beside it.
-  const NOT_FOR_CARS = /^(footway|path|pedestrian|steps|cycleway|bridleway|corridor|platform|track|elevator|via_ferrata|proposed|construction)$/;
   const ways = JSON.parse(text).elements.filter((e) => e.type === "way" && e.geometry && e.tags?.name && !NOT_FOR_CARS.test(e.tags.highway ?? ""));
-  if (ways.length < 500) throw new Error(`only ${ways.length} named streets from OpenStreetMap — refusing to name spots from that`);
+  if (ways.length < 500) throw new Error(`only ${ways.length} named streets from OpenStreetMap — refusing to use that`);
+  osmCache.set(key, ways);
+  return ways;
+}
+
+/** The nearest named street to a point, within 45 m. */
+async function osmStreetNamer(box, lat0) {
+  const ways = await osmWays(box);
   const toXY = xyAt(lat0);
   const items = ways.map((w) => {
     const line = w.geometry.map((g) => toXY([g.lon, g.lat]));
@@ -603,6 +614,114 @@ async function buildLausanne() {
   return file;
 }
 
+
+/* ---------- Basel ----------
+ *
+ * STREET LEVEL, and the page says so. Basel-Stadt publishes `Parkflächen`
+ * openly — every stretch with its street, type, fee hours, maximum stay and
+ * number of spaces — but WITHOUT positions: 0 of 7,815 rows carry geometry.
+ * The layer that does have positions ("Parkieren: Parkflächen") is category B,
+ * "beschränkt öffentlich", behind a special login applied for by form.
+ *
+ * So each row is placed along ITS OWN STREET, taken from OpenStreetMap: the
+ * street is cut into roughly 80 m pieces and its spaces are shared out along
+ * it. A Basel result therefore means "somewhere along this street", never "at
+ * this spot" — the page says that, and the copy button gives the street, not
+ * a point that would look exact.
+ *
+ * 96% of car rows match a street by name; the rest differ only in spacing
+ * ("St.Johanns-Ring" against "St. Johanns-Ring"), which normalising fixes. */
+const BASEL_TABLE = "https://data.bs.ch/api/explore/v2.1/catalog/datasets/100329/exports/json";
+const BASEL_BOX = { s: 47.51, w: 7.53, n: 47.61, e: 7.68 };
+const normStreet = (n) => (n ?? "").toLowerCase().replace(/[\s.]/g, "");
+
+/** "MO-SA: 08:00-19:00" → paid Monday to Saturday, 08:00–19:00. Around the
+ *  clock ("MO-SO: 00:00-24:00") is never free, so it is dropped, and so is
+ *  any shape this does not cover. */
+export function baselSchedule(text) {
+  const m = /^MO-(SA|SO):\s*(\d\d):(\d\d)-(\d\d):(\d\d)$/.exec((text ?? "").trim());
+  if (!m) return null;
+  const from = +m[2] * 60 + +m[3], to = +m[4] * 60 + +m[5];
+  if (from === 0 && to === 1440) return null;
+  return { days: m[1] === "SA" ? "Mo-Sa" : "Mo-So", from, to, maxMin: 0 };
+}
+
+export function baselKind(row) {
+  if (row.typ === "Blaue Zone") return { kind: "blue" };
+  if (row.typ === "Parkplätze unbewirtschaftet") return { kind: "free" };
+  if (row.typ === "Parkplätze gebührenpflichtig") {
+    const schedule = baselSchedule(row.gebpflicht);
+    return schedule ? { kind: "paid", schedule } : null;
+  }
+  return null; // time-limited fields without a duration, no-parking fields, bikes, taxis …
+}
+
+async function buildBasel() {
+  const rows = JSON.parse(await fetchText(BASEL_TABLE));
+  if (!Array.isArray(rows) || rows.length < 1000) throw new Error(`Basel table returned ${rows?.length} rows`);
+  const ways = await osmWays(BASEL_BOX);
+  const toXY = xyAt(47.56);
+
+  // Street name → its pieces with their lengths, so a street's spaces spread
+  // along it instead of piling onto one point.
+  const pieces = new Map();
+  for (const w of ways) {
+    const key = normStreet(w.tags.name);
+    const list = pieces.get(key) ?? [];
+    let run = [];
+    let runLen = 0;
+    const flush = () => {
+      if (run.length < 2) return;
+      const mid = run[Math.floor(run.length / 2)];
+      list.push({ name: w.tags.name, lon: mid.lon, lat: mid.lat, len: runLen });
+      run = [run[run.length - 1]];
+      runLen = 0;
+    };
+    for (const g of w.geometry) {
+      if (run.length) {
+        const prev = run[run.length - 1];
+        runLen += Math.hypot((g.lon - prev.lon) * 76000, (g.lat - prev.lat) * 111000);
+      }
+      run.push(g);
+      if (runLen >= 80) flush();
+    }
+    flush();
+    if (list.length) pieces.set(key, list);
+  }
+
+  const raw = [];
+  let unmatched = 0, unmatchedSpaces = 0;
+  for (const row of rows) {
+    const k = baselKind(row);
+    if (!k) continue;
+    const spaces = row.anzahl_parkfelder ?? 0;
+    if (spaces <= 0) continue;
+    const list = pieces.get(normStreet(row.strasse));
+    if (!list) { unmatched++; unmatchedSpaces += spaces; continue; }
+    /* Share the street's spaces along its pieces, keeping the total exact:
+       rounding each piece on its own dropped a fifth of Basel's spaces. */
+    const total = list.reduce((a, p) => a + p.len, 0) || list.length;
+    let carried = 0, given = 0;
+    list.forEach((piece, i) => {
+      carried += (spaces * (piece.len || 1)) / total;
+      const take = i === list.length - 1 ? spaces - given : Math.round(carried - given);
+      given += take;
+      if (take <= 0) return;
+      const [x, y] = toXY([piece.lon, piece.lat]);
+      raw.push({ ...k, x, y, spaces: take, street: piece.name });
+    });
+  }
+
+  const file = cityFile({
+    city: "Basel",
+    source: "Canton of Basel-Stadt, Parkflächen (CC BY); placed along the street with OpenStreetMap contributors",
+    raw, lat0: 47.56,
+  });
+  file.out.approx = true; // the page says "along this street", not "at this spot"
+  file.summary.unshift(`${rows.length} rows from the canton; ${unmatched} rows (${unmatchedSpaces} spaces) had no matching street and were dropped`);
+  return file;
+}
+
 /* ---------- Shared ---------- */
 
 function mergeSpots(raw, keyOf) {
@@ -653,6 +772,7 @@ const CITIES = {
   bern: { file: "bern.json", build: buildBern },
   luzern: { file: "luzern.json", build: buildLuzern },
   lausanne: { file: "lausanne.json", build: buildLausanne },
+  basel: { file: "basel.json", build: buildBasel },
 };
 
 async function main() {

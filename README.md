@@ -46,7 +46,7 @@ is. Found through `ckan.opendata.swiss` (the catalogue answers scripts there;
 | **Bern** | Geoportal `Parkplaetze_oeffentlich` WFS, blue zone layer; opendata.swiss "terms_open" | blue 11,112 | live |
 | **Lausanne** | `map.lausanne.ch` WFS, blue (macaron) and white zones; opendata.swiss "terms_by" | blue 6,099 · no limit 4 · with a limit 572 | live |
 | **Lucerne** | OGD `oeffentlicher_parkplatz` WFS; opendata.swiss "terms_open" | blue 1,562 · with a limit 1,026 · paid 07–19, free outside 242 | live |
-| Basel | the layer with blue zones ("Parkieren: Parkflächen") is category B, *beschränkt öffentlich*, behind a special login applied for by form; the open `Parkflächen` table has no positions; the free shop product "Parkierung" is special parking only | — | not possible without that login |
+| **Basel** | open `Parkflächen` table (CC BY) — every stretch with street, type, fee hours and count, but **no positions**; placed along its street from OpenStreetMap | blue 19,900 · paid, free outside hours 1,417 | live, **street level** |
 | Biel, Zug, St. Gallen | datasets exist (Biel and Zug current, St. Gallen from 2023) | — | not built yet |
 | Winterthur, Lugano | no space-level dataset found | — | no data |
 | OpenStreetMap, any city | 0–4 streets per city with a parking rule mapped | — | cannot say where parking is free |
@@ -63,6 +63,35 @@ swisstopo's approximate formulas (0.36 m off at Bundesplatz 3, Bern, checked).
 Bern's and Lucerne's WFS both claim EPSG:4326 but send the axes in opposite
 orders; latitude and longitude ranges never overlap in Switzerland, so the
 numbers decide. Bern marks most of its own positions "ungenau" (approximate).
+
+## Basel is street level, and the page says so
+
+Basel-Stadt publishes `Parkflächen` openly, and it is current — but 0 of its
+7,815 rows carry a position. The layer that has positions, "Parkieren:
+Parkflächen", is category B, *beschränkt öffentlich*: not orderable in the
+geodata shop, only through a special login applied for by form. The free shop
+product "Parkierung" holds special parking (disabled spaces, taxis, garages),
+which is no use here.
+
+So each Basel row is placed along its own street: the street is cut into ~80 m
+pieces from OpenStreetMap and the street's spaces are shared out along it,
+keeping the total exact (rounding each piece on its own lost a fifth of the
+spaces). 96% of car rows match a street by name; the rest differ only in
+spacing ("St.Johanns-Ring" against "St. Johanns-Ring"), which normalising
+fixes, and 10 rows (70 spaces) match nothing and are dropped.
+
+A Basel answer therefore reads **"Park along Leonhardsstrasse"**, the page says
+Basel publishes the street and not the exact space, and the copy button gives
+`Leonhardsstrasse, Basel` — a point would look exact when it is not.
+
+## The rule at a spot, not only the state right now
+
+"Free now" is only half an answer: people check the evening before, or for
+next Tuesday. Every result — the instruction, each row in the list, and each
+dot on the map — carries the rule that applies there whatever the hour:
+
+> The rule here: Blue zone: 1 hour with a disc, Mon–Sat 08:00–19:00. Free with
+> no limit outside those hours.
 
 ## Geneva
 
@@ -143,7 +172,7 @@ nobody to a ticket** — an earlier "move by", never a later one:
 ## Tests — each attacked, not just run
 
 ```
-pnpm test    # 32 rule checks, 48 finder checks on the real data files, 30 mapping checks
+pnpm test    # 131 checks: rules, the real data file of every city, and each city's type mapping
 node qa/contrast.mjs                                             # every text colour ≥ 4.5:1 on its surface
 ```
 
@@ -181,6 +210,21 @@ date on it.
   runs the text as typed alongside the Zurich query; when the text as typed
   means a place outside Zurich, that place comes first, marked "outside
   Zurich", and picking it says "Only Zurich so far".
+
+## Four changes after the first day of use
+
+- **The map is answerable.** Every dot opens the street, the kind of parking,
+  the distance, the rule there and a Maps link; the destination dot says so
+  too. A legend sits under the map. Dots with no explanation were decoration.
+- **The phone no longer zooms when the field is tapped.** iOS zooms a page
+  when an input's text is under 16px, and the zoom stays after typing, which
+  made the rest of the page awkward. Every input is 16px.
+- **The search lists places, not addresses.** The name comes first with a mark
+  for what it is (🏛 museum, 🛒 shop, 🚉 station …), the address underneath.
+  Photographs would need a paid photo service; this is what free data gives.
+- **Duplicate list keys.** In Basel a blue zone and a paid space can share one
+  street piece, so the position alone was not unique and React warned that
+  rows could be dropped. The key now carries the kind and the street.
 
 ## Search, rebuilt after a real test on a phone
 
