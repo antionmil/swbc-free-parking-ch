@@ -11,7 +11,7 @@ export default function Home() {
       <p className="mb-4 mt-1 text-[14px] text-body">In {cityList("and")}.</p>
       <Finder />
       <footer className="mt-10 text-[12px] text-muted">
-        <a href="https://onedaybuilt.com" className="font-semibold text-blue hover:underline">onedaybuilt.com</a> — one website a day, all September.
+        <a href="https://onedaybuilt.com" className="font-semibold text-blue hover:underline">Built by Antoine Koerber</a>
       </footer>
     </main>
   );
